@@ -19,3 +19,18 @@
 [submodule "third_party/ygo-ai"]
 	path = third_party/ygo-ai
 	url = https://github.com/jinyan438/ygo-ai.git
+[submodule "reference/YGO-Bench"]
+	path = reference/YGO-Bench
+	url = https://github.com/erwinmsmith/YGO-Bench.git
+[submodule "reference/ygo-harness"]
+	path = reference/ygo-harness
+	url = https://github.com/kwabenaa/ygo-harness.git
+[submodule "reference/yugioh-game"]
+	path = reference/yugioh-game
+	url = https://github.com/tspivey/yugioh-game.git
+[submodule "reference/ygocdb-mcp"]
+	path = reference/ygocdb-mcp
+	url = https://github.com/lieyanqzu/ygocdb-mcp.git
+[submodule "reference/yugioh-mcp-server"]
+	path = reference/yugioh-mcp-server
+	url = https://github.com/alisyedn/yugioh-mcp-server.git

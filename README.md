@@ -10,7 +10,17 @@ Decision record: [alignment.md](alignment.md).
 src/protocol/     wire codec
 src/seat/         lobby join, npm start
 test/protocol/    codec tests
+third_party/      server lineage, codec sources, WindBot relay
+reference/        other repositories named in alignment.md
 ```
+
+Populate the checkouts with:
+
+```bash
+git submodule update --init --recursive
+```
+
+`npm start` uses the published `ygopro-msg-encode` package. The `third_party/ygopro-msg-encode` checkout is the same source, pinned separately. The `reference/` trees are not the seat implementation.
 
 ## Prerequisites
 

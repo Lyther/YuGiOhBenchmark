@@ -1,0 +1,21 @@
+[submodule "third_party/ygopro"]
+	path = third_party/ygopro
+	url = https://github.com/Fluorohydride/ygopro.git
+[submodule "third_party/ygopro-core"]
+	path = third_party/ygopro-core
+	url = https://github.com/Fluorohydride/ygopro-core.git
+[submodule "third_party/srvpro"]
+	path = third_party/srvpro
+	url = https://github.com/mycard/srvpro.git
+[submodule "third_party/koishipro-core.js"]
+	path = third_party/koishipro-core.js
+	url = https://github.com/purerosefallen/koishipro-core.js.git
+[submodule "third_party/ygopro-msg-encode"]
+	path = third_party/ygopro-msg-encode
+	url = https://github.com/purerosefallen/ygopro-msg-encode.git
+[submodule "third_party/ygopro-yrp-encode"]
+	path = third_party/ygopro-yrp-encode
+	url = https://github.com/purerosefallen/ygopro-yrp-encode.git
+[submodule "third_party/ygo-ai"]
+	path = third_party/ygo-ai
+	url = https://github.com/jinyan438/ygo-ai.git

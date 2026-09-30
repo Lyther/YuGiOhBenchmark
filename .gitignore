@@ -1,0 +1,37 @@
+# local config and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# card databases must match the server; keep them local
+*.cdb
+
+# Node install output
+node_modules/
+
+# platform debris
+.DS_Store
+
+# Local IDE and agent overlays
+.idea/
+.vscode/
+.claude/
+.obsidian/
+.cursor/
+.gemini/
+.agent/
+.agent-surface/
+.kilo/
+.cursorrules
+.geminirules
+.roorules
+.clinerules
+.traerules
+.windsurfrules
+.cursorignore
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+*.code-workspace

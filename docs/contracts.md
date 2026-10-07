@@ -17,7 +17,7 @@ Last updated: 2026-10-07
   - the run-folder output files.
 
   There is no HTTP or RPC surface.
-- **Canonical sources.** Until the code exists, this document is canonical. After that, each fact has one source in code:
+- **Canonical sources.** The code now exists, so each fact has one source in code:
   - tool inputs: the zod schemas in `src/mcp/tools.js`, with `test/mcp/tools.test.js` snapshotting `tools/list` so contract changes show up in review;
   - DTO mapping: `src/seat/view.js`;
   - file formats: `src/seat/record.js`;
@@ -87,7 +87,8 @@ All entities live in one seat process and die with it, except the run-folder fil
   - There are no count or legality rules; the server owns them.
 - **DuelResult** (owner `controller.js`, persisted by `record.js`). `{duel, result: win | loss | draw, reason, reasonCode, turns, first: boolean, at}`.
 - **Card** (catalog read model, owner `cards/catalog.js`, read-only).
-  - `{code, alias, name, text, kind (monster | spell | trap), types: string[], attribute?, race?, level?, rank?, link?, linkMarkers?, atk?, def?, scales?, setnames: string[], strings: string[16], source: en-US | super-pre-en | super-pre | zh-CN}`.
+  - `{code, alias, name, text, kind (monster | spell | trap), types: string[], attribute?, race?, level?, rank?, link?, linkMarkers?, atk?, def?, scales?, setnames: string[], strings: string[16], source: en-US | super-pre-en | super-pre | zh-CN | first-edition}`.
+  - `first-edition` means an operator pack replaced the text and effect strings; the name and stats are still those of the base source.
 
 Not stored anywhere: model reasoning, tool-call history (the runtime keeps it), the opponent's hidden cards, metrics.
 
@@ -189,7 +190,7 @@ Rules shared by all tools:
 
 - **Input:** `{text: string}`, 1–255 characters.
 - **Behavior:** sends `CTOS_CHAT` as given. A line starting with `/` is a srvpro command and is not shown to the opponent. Calling it before the seat connects is an error.
-- **Result:** the line as sent, plus any new chat events.
+- **Result:** the line as sent and the number of undelivered events. Chat events, including replies, arrive through `wait`, so each is delivered exactly once.
 
 ### `surrender`
 
@@ -220,7 +221,7 @@ Rules shared by all tools:
   - `grave` and `banished`: `CardRefView[]`.
 - **CardRefView.**
   - `name` (or `"face-down card"`), `code` (absent when unknown), `position`.
-  - Optional: `atk`, `def`, `level` / `rank` / `link`, `counters`, `materials` (names), `equippedTo`, `negated`.
+  - Optional: `atk`, `def`, `level` / `rank` / `link`, `counters`, `materials` (names), `equippedTo`, `targets` (zone labels), `scales: {left, right}`, `negated`. Scales are the server's current values; Extra Deck and banished cards keep their face-up/face-down position.
 - **PromptView.**
   - `seq`, `kind`, `text`, `options: {n, label, tributes?, values?, counters?}[]`.
   - Optional, kind-dependent: `min`, `max`, `sumTarget`, `sumMode` (`exactly` | `at least`), `mustInclude` (`{label, values}[]`), `total`, `cancelable`, `finishable`, `rejected`.
@@ -250,7 +251,7 @@ The `kind` values are closed. Each row gives the answer field, what the server a
 | `tribute` | `SELECT_TRIBUTE` | `choose` at most `max` cards whose `tributes` add up to at least `min`, or `cancel` if cancelable | every card counts as 1 tribute, `min` = `max` = number of cards, not cancelable |
 | `unselect` | `SELECT_UNSELECT_CARD` | `choose` 1, or `finish` / `cancel` when allowed | never |
 | `sum` | `SELECT_SUM` | `choose` the non-mandatory cards; each card, mandatory ones included, counts as one of its `values`. `exactly`: `min`..`max` chosen cards whose total can equal `sumTarget`. `at least`: the total reaches `sumTarget` with no spare card. Mandatory cards are in `mustInclude` | never |
-| `sort` | `SORT_CARD` | `choose` all options in the new order, or `cancel` to keep the order | one card |
+| `sort` | `SORT_CARD` | `choose` all options in the new order, or `cancel` to keep the order; the seat sends each card's new position, as ocgcore reads it | one card |
 | `counter` | `SELECT_COUNTER` | `counts` adding up to `total`, each at most that card's `counters` | one card |
 | `place` | `SELECT_PLACE`, `SELECT_DISFIELD` | `choose` `min` zones | exactly `min` zones available |
 | `position` | `SELECT_POSITION` | `choose` 1 | one position |
@@ -259,6 +260,8 @@ The `kind` values are closed. Each row gives the answer field, what the server a
 | `declare` | `ANNOUNCE_CARD` | `card` (code or exact name); the server checks it | never |
 
 For `tribute`, `min` is a tribute total and `max` a card count. A card worth two tributes can make several answers legal, so a tribute is answered automatically only when every card counts as one. `sumMode` is `exactly` when the message's mode is 0 and `at least` when it is 1.
+
+`choose: []` submits zero cards for card, tribute and sum selections. It is distinct from cancellation; the server decides whether the empty selection is legal, including a sum met by mandatory cards alone.
 
 Every automatic answer appends an `auto` event naming what was chosen. The seat also answers `STOC_TIME_LIMIT` with `CTOS_TIME_CONFIRM` and, as host, sends `HS_START`; neither produces an event.
 
@@ -285,11 +288,11 @@ Every automatic answer appends an `auto` event naming what was chosen. The seat 
 ## CLI
 
 - `npm run seat`: the MCP seat on stdio. Configured only by environment; no arguments.
-- `npm run smoke -- --room <flags#id> [--deck <ydk>] [--names <a>,<b>]`: a model-free plumbing check.
-  - Two seats submit the deck, take the first option at RPS and first player, send one chat line each, surrender at their first in-duel prompt and keep the deck at each side prompt.
-  - Exits 0 when both run folders hold a `match` line and one replay per duel played. Otherwise it exits 1 and prints what is missing.
+- `npm run smoke [-- --room <flags#id>] [--deck <ydk>] [--names <a>,<b>]`: a model-free plumbing check. The room defaults to a fresh `M,TM0,NF#sm<8 hex>`, the deck to `decks/sample.ydk`.
+  - Two seats submit the deck, play fixed rock-paper-scissors hands, go first when asked, send one chat line each, surrender at their first in-duel prompt and keep the deck at each side prompt.
+  - Exits 0 when both seats reached `ended`, each heard the other's chat line, and both run folders hold a `match` line, one replay per duel played and the deck of each duel. Otherwise it exits 1 and prints what is missing.
 - `npm run cards`: refreshes `YGO_CARDS_DIR`. Exits 0 when every source was fetched or was already current, and 1 on any failure, in which case existing files are kept.
-- `npm run probe`: one lobby join; prints JSON; leaves.
+- `npm run probe` (also `npm start`): one lobby join; prints JSON; leaves.
 - `npm test`: `node --test test`, offline.
 
 ## Configuration
@@ -328,7 +331,8 @@ zh-CN/cards.cdb, zh-CN/strings.conf
 - **Merge order.** The catalog merges cards lowest priority first, so later rows replace earlier ones: zh-CN, super-pre (release then update), super-pre-en, en-US. A code is described by the highest-priority source that has it.
 - **Strings.** `strings.conf` files merge the same way. `test-strings.conf` only adds setnames and counters.
 - **Missing files.** A missing en-US set is fatal at seat start. Any other missing set is logged and skipped.
-- **Failed refresh.** Each file is downloaded to a temporary name and renamed into place only after the whole set for that source arrives. On failure the previous files stay.
+- **Failed refresh.** Each file is downloaded with a 5-minute timeout and up to three attempts with jittered backoff (server errors only), staged under a temporary name, and renamed into place only after the whole set for that source arrives. On failure the previous files stay. Behind an HTTP proxy, run with `NODE_USE_ENV_PROXY=1`.
+- **First-edition packs.** Optional `first-edition/*.ypk` files are placed by the operator and never downloaded. Every CDB inside a pack replaces the `text` and the non-empty effect strings of its cards, and those cards report `source: first-edition`. A pack that cannot be read is logged and skipped.
 
 ## Compatibility
 

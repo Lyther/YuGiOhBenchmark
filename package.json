@@ -7,8 +7,10 @@
     "node": ">=22"
   },
   "scripts": {
-    "start": "node src/seat/join-room.js",
-    "test": "node --test"
+    "submodules": "git submodule update --init --recursive",
+    "start": "node src/bin/probe.js",
+    "probe": "node src/bin/probe.js",
+    "test": "node --test test"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.3.1",

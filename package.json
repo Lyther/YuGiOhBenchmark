@@ -11,7 +11,8 @@
     "start": "node src/bin/probe.js",
     "probe": "node src/bin/probe.js",
     "test": "node --test test",
-    "cards": "node src/bin/cards.js"
+    "cards": "node src/bin/cards.js",
+    "seat": "node src/bin/seat.js"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.3.1",

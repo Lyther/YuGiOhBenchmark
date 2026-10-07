@@ -13,6 +13,7 @@ import {
   YGOProCtosTimeConfirm,
   YGOProCtosTpResult,
   YGOProCtosUpdateDeck,
+  YGOProMsgShuffleSetCard,
   YGOProStoc,
   YGOProStocErrorMsg,
 } from "ygopro-msg-encode";
@@ -112,7 +113,21 @@ export function parseServerPacket(packet) {
   const message = YGOProStoc.getInstanceFromPayload(bytes) ?? {
     kind: "unknown", id: bytes[2], byteLength: bytes.length,
   };
-  return { message, raw: bytes.subarray(3) };
+  const raw = bytes.subarray(3);
+  if (message.msg instanceof YGOProMsgShuffleSetCard) decodeSetShuffle(message.msg, raw);
+  return { message, raw };
+}
+
+// Codec 1.3.0 interleaves old/new pairs. The engine writes all old locations
+// first, then all new ones (ocgcore/libduel.cpp duel_shuffle_setcard).
+function decodeSetShuffle(message, raw) {
+  const location = (offset) => ({
+    controller: raw[offset], location: raw[offset + 1], sequence: raw[offset + 2], position: raw[offset + 3],
+  });
+  message.cards = Array.from({ length: message.count }, (_, index) => ({
+    oldLocation: location(3 + index * 4),
+    newLocation: location(3 + (message.count + index) * 4),
+  }));
 }
 
 export function rejectedVersion(message) {

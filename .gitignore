@@ -5,8 +5,11 @@
 *.pem
 *.key
 
-# card databases must match the server; keep them local
+# local card databases
 *.cdb
+data/cards/*
+!data/cards/.gitkeep
+runs/
 
 # Node install output
 node_modules/

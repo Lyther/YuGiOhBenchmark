@@ -280,6 +280,21 @@ test("zones, positions, yes/no, effect questions and options", () => {
   assert.deepEqual(onlyOne.auto, { choose: [1] });
   const disfield = prompt(YGOProMsgSelectDisField, { player: 0, count: 1, flag: (~(1 << 16 | 1 << 24)) >>> 0 });
   assert.deepEqual(labels(disfield), ["opponent's M1", "opponent's S1"]);
+  assert.throws(() => resolveAnswer(place.prompt, { cancel: true }), AnswerError, "a positive count cannot be cancelled");
+
+  // Setting a Spell/Trap asks with count 0: one zone, or cancel (playerop.cpp
+  // select_place; the stock client answers a cancel with [player, 0, 0]).
+  const spells = (sequences) => (~sequences.reduce((mask, sequence) => mask | (1 << (8 + sequence)), 0)) >>> 0;
+  const set = prompt(YGOProMsgSelectPlace, { player: 0, count: 0, flag: spells([0, 1, 2, 3, 4]) });
+  assert.equal(set.prompt.text, "Choose a zone.");
+  assert.deepEqual([set.prompt.min, set.prompt.max, set.prompt.cancelable], [1, 1, true]);
+  assert.equal(set.auto, null);
+  assert.deepEqual(bytes(set, { choose: [3] }), [0, C.LOCATION_SZONE, 2]);
+  assert.deepEqual(bytes(set, { cancel: true }), [0, 0, 0]);
+  assert.throws(() => resolveAnswer(set.prompt, { choose: [] }), AnswerError);
+  const lastZone = prompt(YGOProMsgSelectPlace, { player: 1, count: 0, flag: spells([4]) });
+  assert.equal(lastZone.auto, null, "cancel is still a second legal answer");
+  assert.deepEqual(bytes(lastZone, { cancel: true }), [1, 0, 0]);
 
   const position = prompt(YGOProMsgSelectPosition, { player: 0, code: BLUE_EYES, positions: C.POS_FACEUP_ATTACK | C.POS_FACEUP_DEFENSE });
   assert.deepEqual(labels(position), ["faceup-attack", "faceup-defense"]);

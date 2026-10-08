@@ -254,7 +254,7 @@ The `kind` values are closed. Each row gives the answer field, what the server a
 | `sum` | `SELECT_SUM` | `choose` the non-mandatory cards; each card, mandatory ones included, counts as one of its `values`. `exactly`: `min`..`max` chosen cards whose total can equal `sumTarget`. `at least`: the total reaches `sumTarget` with no spare card. Mandatory cards are in `mustInclude` | never |
 | `sort` | `SORT_CARD` | `choose` all options in the new order, or `cancel` to keep the order; the seat sends each card's new position, as ocgcore reads it | one card |
 | `counter` | `SELECT_COUNTER` | `counts` adding up to `total`, each at most that card's `counters` | one card |
-| `place` | `SELECT_PLACE`, `SELECT_DISFIELD` | `choose` `min` zones | exactly `min` zones available |
+| `place` | `SELECT_PLACE`, `SELECT_DISFIELD` | `choose` `min` zones. A server count of 0 (setting a Spell/Trap) means 1 zone or `cancel`; the seat sends a cancel as `[player, 0, 0]` | exactly `min` zones available, not cancelable |
 | `position` | `SELECT_POSITION` | `choose` 1 | one position |
 | `race`, `attribute` | `ANNOUNCE_RACE`, `ANNOUNCE_ATTRIB` | `choose` exactly `min` | available = `min` |
 | `number` | `ANNOUNCE_NUMBER` | `choose` 1 | one number |

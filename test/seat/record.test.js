@@ -122,6 +122,17 @@ test("a resumed seat cuts off a result line a hard stop left unfinished, so its 
   assert.deepEqual(lines.map((line) => JSON.parse(line).duel), [1, 2]);
 });
 
+test("a deck write cut short leaves no deck file for a resume to choke on", { skip: process.platform === "win32" && "needs ulimit" }, async (t) => {
+  const dir = await runDir(t);
+  const options = JSON.stringify({ runDir: dir, room: "M,TM0,NF#abc123", name: "opus-seat" });
+  const script = `import { createRecorder } from ${JSON.stringify(new URL("../../src/seat/record.js", import.meta.url).href)};
+await createRecorder(${options}).deck(1, "#main\\n89631139\\n#extra\\n!side\\n");`;
+  // A zero file-size limit fails the write after the file is opened, as a hard stop there would.
+  const child = spawnSync("/bin/sh", ["-c", 'ulimit -f 0; exec "$0" --input-type=module -e "$1"', process.execPath, script], { encoding: "utf8" });
+  assert.match(child.stderr, /EFBIG/);
+  assert.equal((await readdir(runFolder(dir, "M,TM0,NF#abc123", "opus-seat"))).includes("duel-1.ydk"), false);
+});
+
 test("session capture stores each packet with its millisecond offset and full bytes", async (t) => {
   const dir = await runDir(t);
   let clock = 1000;

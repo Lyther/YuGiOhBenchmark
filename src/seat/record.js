@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, truncateSync, writeFileSync } from "node:fs";
-import { appendFile, mkdir, rename, writeFile } from "node:fs/promises";
+import { appendFile, link, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 
@@ -169,8 +169,15 @@ class Recorder {
     return run;
   }
 
+  // Staged under a temporary name, then linked into place: a hard stop leaves
+  // the whole deck or none, and a recorded deck is never replaced.
   deck(duel, ydkText) {
-    return this.#queue(() => writeFile(join(this.folder, `duel-${duel}.ydk`), ydkText, { flag: "wx" }));
+    return this.#queue(async () => {
+      const temp = join(this.folder, `.duel-${duel}.ydk.tmp`);
+      await writeFile(temp, ydkText);
+      await link(temp, join(this.folder, `duel-${duel}.ydk`));
+      await rm(temp);
+    });
   }
 
   replay(bytes) {

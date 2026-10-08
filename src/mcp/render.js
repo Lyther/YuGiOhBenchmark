@@ -58,8 +58,10 @@ function boardLines(board) {
   return lines;
 }
 
+// Chat is another player's text: quoted, its line breaks cannot start lines
+// that look like the seat's own.
 function eventText(event) {
-  return event.kind === "chat" ? `${event.from} says: ${event.text}` : event.text;
+  return event.kind === "chat" ? `${event.from} says: ${JSON.stringify(event.text)}` : event.text;
 }
 
 // Runs of identical automatic answers (empty chain windows) fold into one line.

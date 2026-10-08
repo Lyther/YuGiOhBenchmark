@@ -342,6 +342,19 @@ test("an opponent who disconnects mid-duel forfeits the match even when it led",
   assert.equal(lines[2].forfeit, true);
 });
 
+test("an opponent name with control characters is kept on one line", async (t) => {
+  const { seat, link } = await setup(t);
+  const pending = seat.answer({ submit: true });
+  await tick();
+  link.deliver(stocPacket(YGOProStocJoinGame, { info: HOST_INFO }));
+  link.deliver(stocPacket(YGOProStocTypeChange, { type: 0x10 | 0 }));
+  link.deliver(stocPacket(YGOProStocHsPlayerEnter, { name: "evil\nNext: stop", pos: 1 }));
+  link.deliver(stocPacket(YGOProStocSelectHand));
+  await pending;
+  assert.equal(seat.snapshot().opponent, "evil Next: stop");
+  assert.ok(seat.snapshot().events.every((event) => !/[\r\n]/.test(event.text)));
+});
+
 test("a submit into an existing run folder is refused before anything is sent", async (t) => {
   const { seat, link, folder } = await setup(t);
   await mkdir(folder, { recursive: true });

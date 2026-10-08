@@ -41,6 +41,7 @@ export class SeatError extends Error {}
 const REPLAY_GRACE_MS = 15_000;
 const OBSERVER = 7;
 const LOST_CONNECTION = 0x4;
+const CONTROL_CHARS = /\p{Cc}/gu;
 const PLAYER_TYPES = 4;
 const RPS_NAMES = Object.fromEntries(RPS_CHOICES.map(([label, value]) => [value, label]));
 const SIDE_REFUSED = "the Side Deck was refused: keep the same Main, Extra and Side counts and only swap cards between them";
@@ -439,8 +440,10 @@ class Seat {
     this.#state.host = message.isHost;
   }
 
-  #onPlayerEnter({ name, pos }) {
+  #onPlayerEnter({ name: raw, pos }) {
     if (pos === this.#selfType) return;
+    // The name is the other client's text and appears in the model's view.
+    const name = raw.replace(CONTROL_CHARS, " ");
     this.#state.opponent = name;
     this.#event("lobby", `${name} joined the room`);
   }

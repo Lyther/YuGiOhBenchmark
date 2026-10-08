@@ -22,11 +22,21 @@ async function origin(t, routes) {
       response.writeHead(404).end("missing");
       return;
     }
+    if (reply.stream) {
+      // No length and no end: the chunk repeats until the client goes away.
+      response.writeHead(200);
+      const timer = setInterval(() => response.write(reply.stream), 1);
+      response.on("close", () => clearInterval(timer));
+      return;
+    }
     response.writeHead(reply.status ?? 200).end(reply.body);
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
-  t.after(() => new Promise((resolve) => server.close(resolve)));
+  t.after(() => {
+    server.closeAllConnections();
+    return new Promise((resolve) => server.close(resolve));
+  });
   return { base: `http://127.0.0.1:${server.address().port}`, hits };
 }
 
@@ -122,4 +132,15 @@ test("a body over the size limit is refused without retrying", async (t) => {
   assert.equal(result.status, "failed");
   assert.match(result.error, /over the 8 byte limit/);
   assert.equal(hits.length, 1);
+});
+
+test("a body that streams past the size limit is cut off as it arrives", async (t) => {
+  const { base, hits } = await origin(t, { "/g/test-release.cdb": { stream: cdb("0123456789") } });
+  const dir = await tempDir(t);
+  const sources = [{ name: "super-pre", base: `${base}/g/`, files: ["test-release.cdb"] }];
+  const [result] = await refreshCards(dir, { sources, attempts: 3, timeoutMs: 2000, maxFileBytes: 64, ...noWait });
+  assert.equal(result.status, "failed");
+  assert.match(result.error, /over the 64 byte limit/, "not a timeout after buffering an endless body");
+  assert.equal(hits.length, 1);
+  assert.deepEqual(await readdir(dir), [], "nothing was installed");
 });

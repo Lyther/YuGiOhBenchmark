@@ -88,15 +88,26 @@ async function download(url, { fetchImpl, timeoutMs, attempts, baseDelayMs, slee
       }
       const declared = Number(response.headers.get("content-length") ?? 0);
       if (declared > maxFileBytes) throw tooLarge(declared);
-      const bytes = Buffer.from(await response.arrayBuffer());
-      if (bytes.length > maxFileBytes) throw tooLarge(bytes.length);
-      return bytes;
+      return await readCapped(response.body, maxFileBytes, tooLarge);
     } catch (error) {
       if (!retryable || attempt >= attempts) throw error;
       // Exponential backoff with jitter in [0.5, 1.5) of the base step.
       await sleep(baseDelayMs * 2 ** (attempt - 1) * (0.5 + random()));
     }
   }
+}
+
+// A chunked or compressed body has no length to trust up front, so the cap is
+// counted as the bytes arrive; leaving the loop cancels the rest of the stream.
+async function readCapped(body, maxFileBytes, tooLarge) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of body ?? []) {
+    size += chunk.length;
+    if (size > maxFileBytes) throw tooLarge(size);
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks, size);
 }
 
 async function matchesDisk(target, fetched) {

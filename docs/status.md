@@ -6,7 +6,7 @@ Last checked: 2026-10-08. The accepted [concept](context/concept-zero.md), [arch
 
 The MCP seat is implemented: `src/bin/seat.js` serves eight tools over stdio (`wait`, `answer`, `deck_show`, `deck_edit`, `card`, `card_search`, `chat`, `surrender`) and plays as a normal YGOPro client. It covers card data, the deck model, the board mirror, readable events, prompt builders for all 20 response-bearing messages, the seat state machine, the run folder, and the text and JSON views. `npm run cards`, `npm run smoke` and `npm run probe` are the operator commands.
 
-`npm test` passes 144 offline tests on Node 22.23.2, 24.15.0 and 26.10.0. These include authored card fixtures, constructed codec messages, a connection double and captured sessions; their results are diagnostic, not live-duel proof. Separately, `spec/seat-entry.test.js` passes against the real seat. `spec/upstream-msg-encode.test.js` fails on purpose: it holds the four codec defects the seat works around ([report](upstream/ygopro-msg-encode.md), not filed).
+`npm test` passes 145 offline tests on Node 22.23.2, 24.15.0 and 26.10.0. These include authored card fixtures, constructed codec messages, a connection double and captured sessions; their results are diagnostic, not live-duel proof. Separately, `spec/seat-entry.test.js` passes against the real seat. `spec/upstream-msg-encode.test.js` fails on purpose: it holds the four codec defects the seat works around ([report](upstream/ygopro-msg-encode.md), not filed).
 
 The code review added eight regressions, first observed failing and then passing: empty card/sum selections, the shuffle wire layout and occupied slots, Extra Deck returns on a Deck/GY swap, the chat/match-end write race, model-visible scales/positions/targets, and the required English strings file. A ninth test checks that a sum prompt tells the model an empty choice is allowed. These fixes still need normal-duel coverage in P1.11–P1.12.
 
@@ -23,7 +23,7 @@ The third peer review fixed four recovery problems. Each fix has a regression te
 - The reload's `MSG_NEW_TURN` reset the resume checkpoint to turn 1.
 - A duel that ended while a seat was away renumbered the rest of the match and turned a 2-1 win into a draw. Such a duel is now `unknown`, and so is the match unless the known duels decide it.
 
-A PR review then found that a restarted seat whose `YGO_VERSION` the server refuses aborted a match srvpro still held; its rejoin now gets the one version retry, test first.
+A PR review then found that a restarted seat whose `YGO_VERSION` the server refuses aborted a match srvpro still held; its rejoin now gets the one version retry, test first. The same review found that the 64 MiB card download cap read a body with no length whole before checking it; the cap now counts bytes as they arrive.
 
 ## Live evidence on 2339 (2026-10-07 and 2026-10-08)
 

@@ -68,12 +68,12 @@ test("a duel view shows both sides, the chain, events and the prompt with tribut
   assert.ok(lines.includes("Opponent: hand 4 · deck 31 · extra 15 · GY 2 · banished 0"));
   assert.ok(lines.includes("  M: [-] [Ash Blossom & Joyous Spring 0/1800 faceup-defense, Level 3] [-] [-] [-] · EMZ: [-] [-]"));
   assert.ok(lines.includes("  S: [face-down card facedown] [-] [-] [-] [-] · Field: -"));
-  assert.ok(lines.includes('  GY: Maxx "C", Pot of Greed'));
+  assert.ok(lines.includes('  GY: [Maxx "C"] [Pot of Greed]'));
   assert.ok(lines.includes("You: hand 2 · deck 30 · extra 1 · GY 0 · banished 0"));
   assert.ok(lines.includes("  M: [-] [-] [-] [-] [-] · EMZ: [Number 39: Utopia 2500/2000 faceup-attack, Rank 4, materials: Elemental HERO Stratos, Double Coston, 2 Spell Counter] [-]"));
   assert.ok(lines.includes("  S: [-] [-] [-] [-] [-] · Field: [Pot of Greed faceup]"));
-  assert.ok(lines.includes("  Hand: Elemental HERO Stratos, Mirror Force"));
-  assert.ok(lines.includes("  Extra: Number 39: Utopia"));
+  assert.ok(lines.includes("  Hand: [Elemental HERO Stratos] [Mirror Force]"));
+  assert.ok(lines.includes("  Extra: [Number 39: Utopia]"));
   assert.ok(lines.includes("Chain: 1) Mirror Force (opponent's S1) by opponent, negated"));
   assert.ok(lines.includes("  #42-#44 Passed a chain window: nothing can be chained (×3)"), "repeated auto passes are folded in text");
   assert.ok(lines.includes('  #45 opponent says: "good luck"'));

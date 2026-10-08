@@ -246,7 +246,7 @@ Rules shared by all tools:
   - `grave` and `banished`: `CardRefView[]`.
 - **CardRefView.**
   - `name` (or `"face-down card"`), `code` (absent when unknown), `position`.
-  - Optional: `types` (kind first, then type words), `attribute`, `race`, `atk`, `def`, `level` / `rank` / `link`, `counters`, `materials` (names), `equippedTo`, `targets` (zone labels), `scales: {left, right}`, `negated`. These are the server's current values, which effects can change from the printed card; Extra Deck and banished cards keep their face-up/face-down position. The text form shows a monster's as its card does: `Dark [Zombie/Effect]`.
+  - Optional: `types` (kind first, then type words), `attribute`, `race`, `atk`, `def`, `level` / `rank` / `link`, `counters`, `materials` (names), `equippedTo`, `targets` (zone labels), `scales: {left, right}`, `negated`. These are the server's current values, which effects can change from the printed card; Extra Deck and banished cards keep their face-up/face-down position. The text form shows a monster's in its card's order: `Dark Zombie/Effect`. List lines (hand, GY, banished, Extra) bracket each card like zone slots.
 - **PromptView.**
   - `seq`, `kind`, `text`, `options: {n, label, tributes?, values?, counters?}[]`.
   - Optional, kind-dependent: `min`, `max`, `sumTarget`, `sumMode` (`exactly` | `at least`), `mustInclude` (`{label, values}[]`), `total`, `cancelable`, `finishable`, `rejected`.
@@ -389,7 +389,7 @@ Opponent: hand 4 · deck 31 · extra 15 · GY 2 · banished 0
   S: [face-down] [-] [-] [-] [-] · Field: -
 You: hand 5 · deck 30 · extra 15 · GY 1 · banished 0
   M: [-] [-] [-] [-] [-] · S: [-] [-] [-] [-] [-] · Field: -
-  Hand: Elemental HERO Stratos, Pot of Desires, Infinite Impermanence, Polymerization, Mirror Force
+  Hand: [Elemental HERO Stratos 1800/300, Wind Warrior/Effect, Level 4] [Pot of Desires] [Infinite Impermanence] [Polymerization] [Mirror Force]
 Events: #41 Opponent Special Summoned Ash Blossom & Joyous Spring to M2 · #42 Opponent's turn ends · #43 Turn 3 (you): you drew Mirror Force
 Prompt 7 · command
  1) Normal Summon Elemental HERO Stratos (hand)

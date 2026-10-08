@@ -133,7 +133,7 @@ test("the model sees a card's current Attribute, Type and card types, not only i
   const blueEyes = (board) => seatView(state({ board }), { catalog }).dto.board.you.monsters[1];
   assert.deepEqual([blueEyes(printed).attribute, blueEyes(printed).race, blueEyes(printed).types], ["Light", "Dragon", ["monster", "normal"]]);
   assert.deepEqual([blueEyes(changed).attribute, blueEyes(changed).race, blueEyes(changed).types], ["Dark", "Zombie", ["monster", "effect"]]);
-  assert.match(renderSeat(seatView(state({ board: changed }), { catalog }).dto), /\[Blue-Eyes White Dragon faceup-attack, Dark \[Zombie\/Effect\]\]/);
+  assert.match(renderSeat(seatView(state({ board: changed }), { catalog }).dto), /\[Blue-Eyes White Dragon faceup-attack, Dark Zombie\/Effect\]/);
 });
 
 test("a card shows only the stats its kind has, though the server reports zeros for the rest", () => {

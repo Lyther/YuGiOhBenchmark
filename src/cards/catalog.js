@@ -54,7 +54,15 @@ export async function loadCatalog(dir, { log } = {}) {
   const SQL = await initSqlJs();
   const layers = [];
   for (const layer of LAYERS) {
-    const loaded = await readLayer(SQL, join(dir, layer.source), layer);
+    let loaded;
+    try {
+      loaded = await readLayer(SQL, join(dir, layer.source), layer);
+    } catch (error) {
+      // Only en-US is required; a broken optional source must not stop the seat.
+      if (layer.required) throw error;
+      log?.warn({ source: layer.source, err: error }, "card data source unreadable; skipped");
+      continue;
+    }
     if (loaded) {
       layers.push(loaded);
     } else if (layer.required) {
@@ -83,7 +91,11 @@ async function readLayer(SQL, dir, layer) {
       if (index === 0) return null;
       continue;
     }
-    entries.push(...readCdb(SQL, bytes));
+    try {
+      entries.push(...readCdb(SQL, bytes));
+    } catch (error) {
+      throw new Error(`card data unreadable: ${join(dir, file)} (${layer.source}); run npm run cards`, { cause: error });
+    }
   }
   const text = await readFile(join(dir, layer.strings), "utf8").catch((error) => {
     if (layer.required) throw new Error(`card data unavailable: ${join(dir, layer.strings)}; run npm run cards`, { cause: error });

@@ -147,6 +147,18 @@ test("a missing en-US set stops loading and names the refresh command", async (t
   await assert.rejects(loadCatalog(dir), /en-US.*npm run cards/);
 });
 
+test("a corrupt optional database is skipped with a warning; a corrupt en-US one names the refresh command", async (t) => {
+  const dir = await englishOnly(t);
+  await mkdir(join(dir, "super-pre"), { recursive: true });
+  await writeFile(join(dir, "super-pre/test-release.cdb"), "SQLite format 3\0 but truncated");
+  const warnings = [];
+  const catalog = await loadCatalog(dir, { log: { warn: (fields, message) => warnings.push([fields.source, message]) } });
+  assert.ok(catalog.card(89631139), "en-US still loads");
+  assert.deepEqual(warnings.filter(([, message]) => /unreadable/.test(message)), [["super-pre", "card data source unreadable; skipped"]]);
+  await writeFile(join(dir, "en-US/cards.cdb"), "<html>not a database</html>");
+  await assert.rejects(loadCatalog(dir), /unreadable.*en-US.*npm run cards/);
+});
+
 test("an en-US database without strings.conf cannot silently lose prompt text", async (t) => {
   const dir = await englishOnly(t);
   await rm(join(dir, "en-US/strings.conf"));

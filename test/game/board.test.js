@@ -21,6 +21,7 @@ import {
   YGOProMsgPayLpCost,
   YGOProMsgPosChange,
   YGOProMsgRecover,
+  YGOProMsgReloadField,
   YGOProMsgRemoveCounter,
   YGOProMsgShuffleHand,
   YGOProMsgStart,
@@ -234,6 +235,45 @@ test("swapping Deck and GY returns Extra Deck monsters before face-up Pendulums"
   assert.equal(board.sides.me.extra.at(-2).code, UTOPIA);
   assert.equal(board.sides.me.extra.at(-2).position, C.POS_FACEDOWN_DEFENSE);
   assert.equal(board.sides.me.extra.at(-1).code, 16178681);
+});
+
+test("a field reload restores life points, zones, pile sizes and the chain; queries then fill in the cards", () => {
+  // A rejoin starts with MSG_START carrying empty decks (srvpro RequestField).
+  const fresh = createBoard({ duel: 2, start: gameMessage(YGOProMsgStart, {
+    playerType: 1, duelRule: 5, startLp0: 8000, startLp1: 8000,
+    player0: { deckCount: 0, extraCount: 0 }, player1: { deckCount: 0, extraCount: 0 },
+  }) });
+  const slots = (count, used = {}) => Array.from({ length: count }, (_, index) => (used[index] ? { occupied: 1, ...used[index] } : { occupied: 0 }));
+  const board = apply(fresh, YGOProMsgReloadField, {
+    duelRule: 5,
+    players: [
+      { lp: 3100, mzone: slots(7, { 2: { position: FACEDOWN_DEFENSE, xyzCount: 0 } }), szone: slots(8, { 0: { position: C.POS_FACEDOWN } }),
+        deckCount: 28, handCount: 3, graveCount: 4, removedCount: 1, extraCount: 15, extraPCount: 0 },
+      { lp: 6400, mzone: slots(7, { 1: { position: FACEUP_ATTACK, xyzCount: 2 } }), szone: slots(8),
+        deckCount: 30, handCount: 2, graveCount: 0, removedCount: 0, extraCount: 3, extraPCount: 1 },
+    ],
+    chains: [{ code: POT, chainCardController: 0, chainCardLocation: SZONE, chainCardSequence: 0, chainCardSubsequence: 0,
+      triggerController: 0, triggerLocation: SZONE, triggerSequence: 0, desc: POT * 16 }],
+  });
+  assert.deepEqual(board.lp, { me: 6400, opponent: 3100 });
+  assert.deepEqual([board.sides.me.deck, board.sides.opponent.deck], [30, 28]);
+  assert.deepEqual(board.sides.me.monsters[1], { code: 0, position: FACEUP_ATTACK, overlays: [0, 0] });
+  assert.deepEqual(board.sides.opponent.monsters[2], { code: 0, position: FACEDOWN_DEFENSE });
+  assert.deepEqual(board.sides.opponent.spells[0], { code: 0, position: C.POS_FACEDOWN });
+  assert.equal(board.sides.opponent.spells[1], null);
+  const sizes = (side) => ["hand", "grave", "banished", "extra"].map((list) => side[list].length);
+  assert.deepEqual(sizes(board.sides.opponent), [3, 4, 1, 15]);
+  assert.deepEqual(sizes(board.sides.me), [2, 0, 0, 3]);
+  assert.deepEqual(board.chain, [{ card: { side: "opponent", zone: "spell", index: 0 }, code: POT, desc: POT * 16, controller: "opponent" }]);
+
+  const filled = apply(board, YGOProMsgUpdateData, { player: 1, location: MZONE, cards: [
+    EMPTY, { flags: C.QUERY_CODE | C.QUERY_POSITION | C.QUERY_OVERLAY_CARD, code: UTOPIA, controller: 1, location: MZONE, sequence: 1,
+      position: FACEUP_ATTACK, overlayCards: [BLUE_EYES, POT] },
+    EMPTY, EMPTY, EMPTY, EMPTY, EMPTY,
+  ] });
+  assert.deepEqual(cardAt(filled, 1, MZONE, 1), { code: UTOPIA, position: FACEUP_ATTACK, overlays: [BLUE_EYES, POT] });
+  const hidden = apply(board, YGOProMsgUpdateData, { player: 0, location: MZONE, cards: [EMPTY, EMPTY, HIDDEN, EMPTY, EMPTY, EMPTY, EMPTY] });
+  assert.equal(cardAt(hidden, 0, MZONE, 2).position, FACEDOWN_DEFENSE, "a hidden card keeps its reloaded position");
 });
 
 test("the reducer is pure: input boards are untouched and unrelated messages change nothing", () => {

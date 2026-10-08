@@ -20,6 +20,7 @@ import {
   YGOProMsgPayLpCost,
   YGOProMsgPosChange,
   YGOProMsgRecover,
+  YGOProMsgReloadField,
   YGOProMsgRemoveCounter,
   YGOProMsgSet,
   YGOProMsgShuffleExtra,
@@ -322,6 +323,34 @@ function swapGraveDeck(board, { player }, { catalog }) {
   state.deck = deckCount;
 }
 
+function reloadedSlot({ occupied, position, xyzCount }) {
+  if (!occupied) return null;
+  return xyzCount ? { code: 0, position, overlays: Array(xyzCount).fill(0) } : { code: 0, position };
+}
+
+// A rejoin's MSG_RELOAD_FIELD (srvpro RequestField, ocgcore query_field_info):
+// life points, slot positions and pile sizes. The MSG_UPDATE_DATA queries
+// that follow name the cards; the Deck has none, so its count comes from here.
+function reloadField(board, { players, chains }) {
+  players.forEach((info, player) => {
+    const state = side(board, player);
+    board.lp[who(board, player)] = info.lp;
+    state.monsters = info.mzone.map(reloadedSlot);
+    state.spells = info.szone.map(reloadedSlot);
+    state.deck = info.deckCount;
+    state.hand = Array.from({ length: info.handCount }, unknownCard);
+    state.grave = Array.from({ length: info.graveCount }, unknownCard);
+    state.banished = Array.from({ length: info.removedCount }, unknownCard);
+    state.extra = Array.from({ length: info.extraCount }, unknownCard);
+  });
+  board.chain = chains.map((link) => ({
+    card: zoneRef(board, { controller: link.chainCardController, location: link.chainCardLocation, sequence: link.chainCardSequence }),
+    code: cardCode(link.code),
+    desc: link.desc,
+    controller: who(board, link.triggerController),
+  }));
+}
+
 function lifePoints(board, player, change) {
   const key = who(board, player);
   board.lp[key] = Math.max(0, change(board.lp[key]));
@@ -366,6 +395,7 @@ const HANDLERS = new Map([
   [YGOProMsgShuffleExtra, shuffleExtra],
   [YGOProMsgShuffleSetCard, shuffleSetCards],
   [YGOProMsgSwapGraveDeck, swapGraveDeck],
+  [YGOProMsgReloadField, reloadField],
 ]);
 
 // Pure reducer: returns a new board for a board-changing message, otherwise the input.

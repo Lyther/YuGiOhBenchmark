@@ -62,6 +62,8 @@ const PLAYER_TYPES = 4;
 const RPS_NAMES = Object.fromEntries(RPS_CHOICES.map(([label, value]) => [value, label]));
 const SIDE_REFUSED = "the Side Deck was refused: keep the same Main, Extra and Side counts and only swap cards between them";
 const RETRY_TEXT = "The server rejected the previous answer (MSG_RETRY); choose again.";
+const SCORE_KEYS = Object.freeze({ win: "me", loss: "opponent", draw: "draws" });
+const UNSEEN = "the seat did not see it end";
 const REJOINING = "the seat is rejoining the match after a lost connection; call wait";
 const DECK_ERRORS = Object.freeze({
   [DeckErrorType.LFLIST]: (card) => `${card} is not allowed by the banlist`,
@@ -88,14 +90,28 @@ function resumeNote(found) {
   return `This run folder holds an interrupted match (${found.results.length} duels finished). Submit now to rejoin it with the deck it started with; the server holds the seat only for a few minutes.`;
 }
 
+// `unknown` counts duels that ended unseen; it is present only when nonzero.
+function tally(score, result) {
+  const key = SCORE_KEYS[result] ?? "unknown";
+  score[key] = (score[key] ?? 0) + 1;
+}
+
 function scoreOf(results) {
   const score = { me: 0, opponent: 0, draws: 0 };
-  for (const { result } of results) {
-    if (result === "win") score.me += 1;
-    else if (result === "loss") score.opponent += 1;
-    else score.draws += 1;
-  }
+  for (const { result } of results) tally(score, result);
   return score;
+}
+
+// The known duels decide the match only if no unknown result could change it.
+function matchResult({ me, opponent, unknown = 0 }) {
+  if (me > opponent + unknown) return "win";
+  if (opponent > me + unknown) return "loss";
+  return unknown ? "unknown" : "draw";
+}
+
+function scoreText({ me, opponent, draws, unknown }) {
+  const draw = draws ? ` with ${draws} draws` : "";
+  return `${me}-${opponent}${draw}${unknown ? `; ${unknown} duel result${unknown > 1 ? "s" : ""} unknown` : ""}`;
 }
 
 function autoText({ prompt, auto }) {
@@ -396,21 +412,41 @@ class Seat {
     const { match } = this.#state;
     match.results = results.map(({ duel: number, result, reason, reasonCode, turns, first }) => ({ duel: number, result, reason, reasonCode, turns, first }));
     match.score = scoreOf(match.results);
-    match.duel = match.results.length;
+    // seat.json names the last duel that started, finished or not.
+    match.duel = Math.max(match.results.length, duel);
     this.#duelsPlayed = match.duel;
     this.#replaysReceived = replays;
     for (const number of decks.keys()) this.#decksRecorded.add(number);
     if (decks.size) this.#state.deck = parseDeck(decks.get(Math.max(...decks.keys())));
     this.#startDeck = decks.has(1) ? parseDeck(decks.get(1)) : copyDeck(this.#state.deck);
     // The checkpointed turn belongs to the duel still in progress, if any.
-    if (duel === match.duel + 1) this.#reloadTurn = turn;
+    if (this.#inProgress()) this.#reloadTurn = turn;
     this.#started = started;
     if (started) {
       this.#rejoin = { reason: "the seat restarted", attempts: 0 };
       this.#state.waiting = "rejoin";
     }
     this.#resumeNote = null;
-    this.#event("lobby", `Resuming the interrupted match in this folder: ${match.duel} duels finished, score ${match.score.me}-${match.score.opponent}`);
+    this.#event("lobby", `Resuming the interrupted match in this folder: ${match.results.length} duels finished, score ${scoreText(match.score)}`);
+  }
+
+  // The last duel that started has no result yet.
+  #inProgress() {
+    const { match } = this.#state;
+    return match.results.length < match.duel;
+  }
+
+  // The duel in progress is over without an MSG_WIN the seat handled: it ended
+  // while the seat was away, or in a packet that failed. srvpro never resends
+  // a result, and its later choices do not reveal one.
+  #missedDuel() {
+    if (!this.#inProgress()) return;
+    const { match } = this.#state;
+    const line = { duel: match.duel, result: "unknown", reason: UNSEEN };
+    match.results.push(line);
+    tally(match.score, line.result);
+    this.#event("win", `Duel ${match.duel} ended while the seat could not see it; its result is unknown`);
+    this.#writeResult({ type: "duel", ...line });
   }
 
   #checkpoint(fields) {
@@ -728,6 +764,7 @@ class Seat {
   }
 
   #onChangeSide() {
+    this.#missedDuel();
     this.#sideSubmitted = false;
     this.#state.phase = "side";
     this.#setPrompt(lobbyPrompt("side", { text: this.#sideText() }));
@@ -755,6 +792,7 @@ class Seat {
   // reported over once one replay per duel arrived, the server closed, or the
   // grace window passed, so the run folder is complete first.
   #onDuelEnd() {
+    this.#missedDuel();
     this.#state.waiting = "server";
     this.#state.prompt = null;
     if (this.#replaysReceived >= this.#duelsPlayed) {
@@ -770,12 +808,11 @@ class Seat {
     clearTimeout(this.#replayTimer);
     this.#replayTimer = null;
     const { score } = this.#state.match;
-    const byScore = score.me > score.opponent ? "win" : score.me < score.opponent ? "loss" : "draw";
-    const result = this.#forfeit ?? this.#decided ?? byScore;
+    const result = this.#forfeit ?? this.#decided ?? matchResult(score);
     this.#state.phase = "ended";
     this.#state.waiting = null;
     const how = this.#forfeit ? " by forfeit" : this.#decided ? " by a match-winning effect" : "";
-    this.#event("duel", `The match is over: ${result}${how}, ${score.me}-${score.opponent}${score.draws ? ` with ${score.draws} draws` : ""}`);
+    this.#event("duel", `The match is over: ${result}${how}, ${scoreText(score)}`);
     const decidedBy = this.#forfeit ? { forfeit: true } : this.#decided ? { matchKill: true } : {};
     this.#writeResult({ type: "match", result, score: { ...score }, opponent: this.#state.opponent, ...decidedBy });
     // The run folder must be complete before any call reports the match over.
@@ -807,13 +844,17 @@ class Seat {
   }
 
   // A rejoin's field reload (srvpro RequestField) restarts the stream with an
-  // MSG_START whose decks are empty; it continues the duel this seat was in.
+  // MSG_START whose decks are empty. It continues the duel in progress, or
+  // with none in progress shows one that started while the seat was away.
   #onStart(msg) {
     const { match } = this.#state;
     const previous = this.#state.board;
     const reload = msg.player0.deckCount === 0 && msg.player1.deckCount === 0;
-    const duel = reload && previous ? match.duel : match.duel + 1;
+    const continues = reload && this.#inProgress();
+    const duel = continues ? match.duel : match.duel + 1;
     const board = createBoard({ duel, start: msg, version: (previous?.version ?? -1) + 1 });
+    // Only once the board is built: a malformed MSG_START ends no duel.
+    if (!continues) this.#missedDuel();
     if (!reload && !this.#decksRecorded.has(duel)) this.#deckAccepted(duel);
     match.duel = duel;
     this.#duelsPlayed = duel;
@@ -822,11 +863,12 @@ class Seat {
     this.#state.prompt = null;
     this.#restoring = reload;
     if (reload) {
-      this.#reloadTurn = previous?.turn ?? this.#reloadTurn;
+      this.#reloadTurn = continues ? (previous?.turn ?? this.#reloadTurn) : null;
       this.#event("duel", `Duel ${duel} continues from the server's copy of the field`);
       return;
     }
     this.#faults = 0;
+    this.#reloadTurn = null;
     this.#checkpoint({ duel, turn: 0 });
     this.#event("duel", `Duel ${duel} starts: ${board.me === 0 ? "you go first" : "you go second"}`);
   }
@@ -873,9 +915,7 @@ class Seat {
     // winner (single_duel.cpp DuelEndProc; srvpro scores it 99).
     if (this.#matchKill && result !== "draw") this.#decided = result;
     this.#matchKill = false;
-    if (result === "win") match.score.me += 1;
-    else if (result === "loss") match.score.opponent += 1;
-    else match.score.draws += 1;
+    tally(match.score, result);
     const line = { duel: match.duel, result, reason, reasonCode: msg.type, turns: board?.turn ?? 0, first: me === 0 };
     match.results.push(line);
     if (event) this.#event(event.kind, event.text);

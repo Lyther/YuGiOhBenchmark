@@ -111,8 +111,8 @@ export function renderSeat(view) {
   let header = `Phase: ${view.phase} · room ${view.room} · you: ${view.you.name}${view.you.host ? " (host)" : ""}`;
   if (view.opponent) header += ` · opponent: ${view.opponent}`;
   if (view.match.duel) {
-    const { me, opponent, draws } = view.match.score;
-    header += ` · duel ${view.match.duel}, score you ${me} - ${opponent} opponent${draws ? `, ${draws} draws` : ""}`;
+    const { me, opponent, draws, unknown } = view.match.score;
+    header += ` · duel ${view.match.duel}, score you ${me} - ${opponent} opponent${draws ? `, ${draws} draws` : ""}${unknown ? `, ${unknown} unknown` : ""}`;
   }
   return [header, ...(view.board ? boardLines(view.board) : []), ...eventLines(view.events), ...statusLines(view), `Next: ${view.next}`].join("\n");
 }

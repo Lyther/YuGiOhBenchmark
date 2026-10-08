@@ -52,7 +52,7 @@ All entities live in one seat process and die with it, except the run-folder fil
   - `delivered`: `{event, boardVersion}`, the last sequence number and board version returned to the caller. Both only increase.
   - `deck` (WorkingDeck) and `submitted` (a WorkingDeck snapshot or none).
   - `lobby`: `{host: boolean, opponent: string | null, opponentReady: boolean}`.
-  - `match`: `{duel, results: DuelResult[], score: {me, opponent, draws}}`. `duel` is the server's duel number, from 1. The seat assumes no match length: the server's `DUEL_END` ends the match after however many duels it took.
+  - `match`: `{duel, results: DuelResult[], score: {me, opponent, draws, unknown?}}`. `duel` is the server's duel number, from 1: the last duel that started, finished or not. `score.unknown` counts duels whose result is `unknown` and is present only when nonzero. The seat assumes no match length: the server's `DUEL_END` ends the match after however many duels it took.
   - `disconnect`: `{reason}` or none. It is set exactly once and ends the phase machine.
 - **Board** (owner `game/board.js`, one per duel, built at `MSG_START`).
   - `me`: the duel player index (0 or 1) from `MSG_START`. It is fixed for the duel and may change in the next one.
@@ -87,7 +87,7 @@ All entities live in one seat process and die with it, except the run-folder fil
 - **WorkingDeck** (owner `deck/deck.js`). `{main: code[], extra: code[], side: code[]}`, order preserved.
   - Codes are positive integers below 2^28.
   - There are no count or legality rules; the server owns them.
-- **DuelResult** (owner `controller.js`, persisted by `record.js`). `{duel, result: win | loss | draw, reason, reasonCode, turns, first: boolean, at}`.
+- **DuelResult** (owner `controller.js`, persisted by `record.js`). `{duel, result: win | loss | draw | unknown, reason, reasonCode, turns, first: boolean, at}`. `unknown` is a duel that ended without an `MSG_WIN` the seat handled (Rejoin, Limits). It has only `duel`, `result`, `reason: "the seat did not see it end"` and `at`, and it is never counted as a draw.
 - **Card** (catalog read model, owner `cards/catalog.js`, read-only).
   - `{code, alias, name, text, kind (monster | spell | trap), types: string[], attribute?, race?, level?, rank?, link?, linkMarkers?, atk?, def?, scales?, setnames: string[], strings: string[16], source: en-US | super-pre-en | super-pre | zh-CN | first-edition}`.
   - `first-edition` means an operator pack replaced the text and effect strings; the name and stats are still those of the base source.
@@ -109,6 +109,7 @@ Not stored anywhere: model reasoning, tool-call history (the runtime keeps it), 
 - **`results.jsonl`.** UTF-8, one JSON object per line, append-only:
   - `{"type":"duel","room":"M,TM0,NF#abc123","duel":1,"result":"win","reason":"LP reached 0","reasonCode":1,"turns":7,"first":true,"at":"2026-10-07T12:00:00.000Z"}`
   - `{"type":"match","room":"M,TM0,NF#abc123","result":"win","score":{"me":2,"opponent":1,"draws":0},"opponent":"gpt-seat","at":"…"}`, written once when the server ends the match, whether that took one, two or three duels.
+    - `result` is `win` if `me > opponent + unknown`, `loss` if `opponent > me + unknown`, and otherwise `unknown` when some duel is `unknown` (`score` then has `unknown`), else `draw`.
     - A lost connection (`reasonCode` 4) ends the match. The player who stayed wins it whatever the score, and the line adds `"forfeit":true`. A leave between duels adds no `duel` line, because no duel was played.
     - A match-winning card effect (`MSG_MATCH_KILL`) ends the match after its duel. That duel's winner wins the match whatever the score, and the line adds `"matchKill":true`. If that duel is a draw, the score decides.
   - `{"type":"aborted","room":"…","phase":"duel","duel":2,"reason":"could not rejoin after 6 attempts (first: server-closed; last: server-closed)","at":"…"}`, written once if the seat disconnects before `match`.
@@ -128,13 +129,13 @@ Resume first: a lost connection or a damaged seat state never gives a match up b
 - **Triggers.** The server closing the socket, a socket error, or a server packet the seat could not read or handle (`unreadable` event). A failed packet can leave the board or the pending prompt stale, so the seat drops its connection and reloads the server's copy. Faults rejoin at most twice per duel; after that the seat reports them and plays on with what it has.
 - **Before the first duel** (srvpro's lobby stage) srvpro does not hold the seat. The rejoin is a fresh join that sends the deck and `READY` again; after a refused deck it waits for the model's submit.
 - **After the first duel started**, the rejoin sends `PLAYER_INFO` and `JOIN_GAME` with the same name and room, then `UPDATE_DECK` with the deck last sent before the first duel (srvpro compares those bytes). It never sends `READY` (during siding that would mark the side deck submitted). srvpro then sends `DUEL_START` and, by stage: `SELECT_HAND`, `SELECT_TP`, `CHANGE_SIDE`, or mid-duel an `MSG_START` with empty decks, `MSG_NEW_TURN`, `MSG_NEW_PHASE`, `MSG_RELOAD_FIELD`, `MSG_UPDATE_DATA` per location, and the pending hint and prompt (verified on 2339, fixtures `rejoin-a-*.bin`).
-  - That `MSG_START` continues the current duel: no duel is counted and the turn count is kept, because the server does not resend it.
+  - That `MSG_START` continues the duel in progress: no duel is counted and the turn count is kept, because the server does not resend it. If the seat saw the last duel end, it is the next duel, which started while the seat was away.
   - The pending prompt is cleared at the drop and comes back as a new prompt `seq`.
 - **Attempts.** Backoff 1, 2, 4, 8, 16, 16 s, each with jitter in [0.5, 1.5): about 47 s, inside srvpro's default 90 s hold (2339 held a dropped seat for 298 s on 2026-10-08). At most 10 rejoins per match.
 - **Refusals end the match record.** Seated as an observer (srvpro no longer holds the seat), or a deck error (the deck differs) → `disconnected` with that reason and an `aborted` line. So does running out of attempts. A fault alone never records a duel or match result.
-- **A restarted seat** (the agent or its process stopped) resumes from its run folder when started with the same `YGO_ROOM`, `YGO_NAME` and `YGO_RUN_DIR` within srvpro's hold (about 5 minutes on 2339). Its deck prompt says so. Its submit restores the duel results, score, recorded decks and replay count, then rejoins as above with `duel-1.ydk`, whatever deck the new process was given; the working deck becomes the last one recorded. The turn count comes from `seat.json`. If the server no longer restores the match within 15 s of the rejoin (for example it already forfeited the seat, or made a new room of that name), the rejoin is refused.
+- **A restarted seat** (the agent or its process stopped) resumes from its run folder when started with the same `YGO_ROOM`, `YGO_NAME` and `YGO_RUN_DIR` within srvpro's hold (about 5 minutes on 2339). Its deck prompt says so. Its submit restores the duel results, score, recorded decks and replay count, then rejoins as above with `duel-1.ydk`, whatever deck the new process was given; the working deck becomes the last one recorded. The duel number and turn count come from `seat.json`. If the server no longer restores the match within 15 s of the rejoin (for example it already forfeited the seat, or made a new room of that name), the rejoin is refused.
 - **Stopping.** A seat that stops during a started match (stdin closed, `SIGTERM`, `SIGINT`) does not send `LEAVE_GAME`, which would forfeit; it writes an `interrupted` line and closes the socket. srvpro forfeits the seat only if nobody rejoins within its hold. Before the first duel and after the match the seat leaves normally.
-- **Limits.** A duel that ends while the seat is away (the opponent surrendered) is not seen; srvpro resends no `MSG_WIN`. A match-winning effect announced while away is lost the same way. When a dropped player never returns, 2339 closed the other player's socket after the hold with no `MSG_WIN`; that seat's rejoin then finds no match and records `aborted`, not a win.
+- **Limits.** A duel that ends while the seat is away (the opponent surrendered) is not seen; srvpro resends no `MSG_WIN`. The seat plays on and records that duel as `unknown` once the server shows it is over: a `CHANGE_SIDE`, a new duel's `MSG_START` or `DUEL_END` while it is still in progress. The match result is then `unknown` unless the known duels decide it. The seat does not guess the result: srvpro keeps scores to itself, and the next first-player choice (the loser's, alternating after a draw) tells a win from a draw only if the seat also knows who chose for the missed duel, which a restarted seat does not. A match-winning effect announced while away is lost the same way. When a dropped player never returns, 2339 closed the other player's socket after the hold with no `MSG_WIN`; that seat's rejoin then finds no match and records `aborted`, not a win.
 
 ## MCP Tools
 
@@ -226,7 +227,7 @@ Rules shared by all tools:
 
 - **SeatView.**
   - `phase`, `room`, `you: {name, host}`, `opponent: string | null`.
-  - `match: {duel, score: {me, opponent, draws}}`.
+  - `match: {duel, score: {me, opponent, draws, unknown?}}`.
   - `board: BoardView | null` (null means unchanged), `boardVersion`.
   - `events: EventView[]`: every event after the cursor.
   - `prompt: PromptView | null`.

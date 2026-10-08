@@ -496,6 +496,15 @@ test("chat goes out unchanged; opponent lines wake a wait; server lines are tagg
   assert.deepEqual(chats.map((event) => [event.from, event.text]), [["server", "[Server]: welcome"], ["opponent", "your move"]]);
 });
 
+// srvpro's lobby replay for a recognized rejoin, then DUEL_START; while siding
+// CHANGE_SIDE follows (fixtures/sessions/rejoin-a-3.bin).
+function rejoined(link) {
+  link.deliver(stocPacket(YGOProStocJoinGame, { info: HOST_INFO }));
+  link.deliver(stocPacket(YGOProStocTypeChange, { type: 0x10 | 0 }));
+  link.deliver(stocPacket(YGOProStocHsPlayerEnter, { name: "gpt-seat", pos: 1 }));
+  link.deliver(stocPacket(YGOProStocDuelStart));
+}
+
 // srvpro's answer to a recognized rejoin mid-duel, as captured live in
 // fixtures/sessions/rejoin-a-2.bin: an empty-deck MSG_START and the field.
 function rejoinMidDuel(link, { lp, deck }) {
@@ -503,10 +512,7 @@ function rejoinMidDuel(link, { lp, deck }) {
   const player = (life, deckCount) => ({
     lp: life, mzone: slots(7), szone: slots(8), deckCount, handCount: 5, graveCount: 0, removedCount: 0, extraCount: 1, extraPCount: 0,
   });
-  link.deliver(stocPacket(YGOProStocJoinGame, { info: HOST_INFO }));
-  link.deliver(stocPacket(YGOProStocTypeChange, { type: 0x10 | 0 }));
-  link.deliver(stocPacket(YGOProStocHsPlayerEnter, { name: "gpt-seat", pos: 1 }));
-  link.deliver(stocPacket(YGOProStocDuelStart));
+  rejoined(link);
   link.deliver(gamePacket(YGOProMsgStart, {
     playerType: 0, duelRule: 5, startLp0: 8000, startLp1: 8000,
     player0: { deckCount: 0, extraCount: 0 }, player1: { deckCount: 0, extraCount: 0 },
@@ -610,6 +616,30 @@ test("a rejoin dropped before its restore leaves no deadline to abort the next o
   }
 });
 
+// A new seat process taking over the folder that a stopped seat left mid-match.
+async function restart(t, folder) {
+  const file = join(folder, "seat.json");
+  const state = JSON.parse(await readFile(file, "utf8"));
+  // The stopped seat's process is gone: a real pid that has exited.
+  await writeFile(file, JSON.stringify({ ...state, pid: spawnSync(process.execPath, ["-e", ""]).pid }));
+  const link = createLink();
+  const record = createRecorder({ runDir: dirname(dirname(folder)), room: ROOM, name: NAME });
+  const seat = createSeat({
+    config: { host: "koishi.example", port: 2339, name: NAME, room: ROOM, version: 0x1362, waitMs: 2000 },
+    catalog, deck: { main: [BLUE_EYES], extra: [], side: [] }, record, connect: link.connect, log, rejoinBaseMs: 1, random: () => 0.5,
+  });
+  t.after(() => seat.close());
+  return { seat, link, state };
+}
+
+// Submits the side deck unchanged; the server accepts it with DUEL_START.
+async function submitSide(seat, link) {
+  const pending = seat.answer({ submit: true });
+  await tick();
+  link.deliver(stocPacket(YGOProStocDuelStart));
+  return { pending };
+}
+
 test("a restarted seat resumes the interrupted match in its folder with the deck the match started with", async (t) => {
   const first = await setup(t);
   await joinRoom(first.seat, first.link);
@@ -625,18 +655,8 @@ test("a restarted seat resumes the interrupted match in its folder with the deck
   for (const player of [0, 1, 0]) first.link.deliver(gamePacket(YGOProMsgNewTurn, { player }));
   await first.seat.close("stdin closed");
   assert.equal(await side, "disconnected");
-  // The stopped seat's process is gone: a real pid that has exited.
-  const state = JSON.parse(await readFile(join(first.folder, "seat.json"), "utf8"));
+  const { seat, link, state } = await restart(t, first.folder);
   assert.deepEqual([state.started, state.duel, state.turn], [true, 2, 3]);
-  await writeFile(join(first.folder, "seat.json"), JSON.stringify({ ...state, pid: spawnSync(process.execPath, ["-e", ""]).pid }));
-
-  const link = createLink();
-  const record = createRecorder({ runDir: dirname(dirname(first.folder)), room: ROOM, name: NAME });
-  const seat = createSeat({
-    config: { host: "koishi.example", port: 2339, name: NAME, room: ROOM, version: 0x1362, waitMs: 2000 },
-    catalog, deck: { main: [BLUE_EYES], extra: [], side: [] }, record, connect: link.connect, log, rejoinBaseMs: 1, random: () => 0.5,
-  });
-  t.after(() => seat.close());
   assert.match(seat.snapshot().prompt.text, /interrupted match \(1 duels finished\)/);
   const pending = seat.answer({ submit: true });
   await tick();
@@ -664,6 +684,103 @@ test("a restarted seat resumes the interrupted match in its folder with the deck
   assert.deepEqual(lines[3].score, { me: 0, opponent: 2, draws: 0 });
   assert.deepEqual((await readdir(first.folder)).sort(), ["duel-1.ydk", "duel-2.ydk", "replay-1.yrp", "replay-2.yrp", "results.jsonl", "seat.json"]);
   assert.ok(seat.snapshot().events.every((event) => !/Could not write/.test(event.text)), "no file was written twice");
+});
+
+test("a restarted seat whose duel ended while it was away records that duel and the match as unknown", async (t) => {
+  const first = await setup(t);
+  await joinRoom(first.seat, first.link);
+  await startDuel(first.seat, first.link);
+  first.link.deliver(gamePacket(YGOProMsgNewTurn, { player: 0 }));
+  await first.seat.close("stdin closed");
+  // Meanwhile the opponent surrendered duel 1 (live room awa5fe6836): srvpro
+  // restores the seat while siding, with no MSG_WIN.
+  const { seat, link } = await restart(t, first.folder);
+  const resumed = seat.answer({ submit: true });
+  await tick();
+  rejoined(link);
+  link.deliver(stocPacket(YGOProStocChangeSide));
+  assert.equal(await resumed, "prompt");
+  assert.match(seat.snapshot().prompt.text, /Duel 1 is over \(unknown\)/);
+  assert.deepEqual(seat.snapshot().match.score, { me: 0, opponent: 0, draws: 0, unknown: 1 });
+  const second = await submitSide(seat, link);
+  await playDuel(seat, link, { winner: 1 });
+  link.deliver(stocPacket(YGOProStocChangeSide));
+  assert.equal(await second.pending, "prompt");
+  const third = await submitSide(seat, link);
+  await playDuel(seat, link, { winner: 0 });
+  link.deliver(stocPacket(YGOProStocDuelEnd));
+  for (const replay of [1, 2, 3]) link.deliver(Buffer.from([4, 0, 23, replay]));
+  assert.equal(await third.pending, "ended");
+  assert.match(lastEvent(seat).text, /The match is over: unknown, 1-1; 1 duel result unknown/);
+  await seat.close();
+  const lines = await results(first.folder);
+  assert.deepEqual(lines.map((line) => [line.type, line.duel, line.result ?? line.phase]), [
+    ["interrupted", 1, "duel"], ["duel", 1, "unknown"], ["duel", 2, "loss"], ["duel", 3, "win"], ["match", undefined, "unknown"],
+  ]);
+  assert.deepEqual(lines[4].score, { me: 1, opponent: 1, draws: 0, unknown: 1 }, "1-1 with a duel unseen is no draw");
+  assert.deepEqual((await readdir(first.folder)).filter((file) => file.endsWith(".ydk")).sort(), ["duel-1.ydk", "duel-2.ydk", "duel-3.ydk"]);
+});
+
+test("after a duel that ended unseen, the known duels decide the match only when no result could change it", async (t) => {
+  for (const [winner, result, score] of [[0, "win", { me: 2, opponent: 0 }], [1, "loss", { me: 0, opponent: 2 }]]) {
+    const { seat, link, folder } = await setup(t);
+    await joinRoom(seat, link);
+    await startDuel(seat, link);
+    link.serverClose();
+    await delay(20);
+    rejoined(link);
+    link.deliver(stocPacket(YGOProStocChangeSide));
+    assert.match(seat.snapshot().events.findLast((event) => event.kind === "win").text, /Duel 1 ended while the seat could not see it/);
+    let sided;
+    for (const end of [YGOProStocChangeSide, YGOProStocDuelEnd]) {
+      sided = await submitSide(seat, link);
+      await playDuel(seat, link, { winner });
+      link.deliver(stocPacket(end));
+      if (end === YGOProStocChangeSide) assert.equal(await sided.pending, "prompt");
+    }
+    for (const replay of [1, 2, 3]) link.deliver(Buffer.from([4, 0, 23, replay]));
+    assert.equal(await sided.pending, "ended");
+    await seat.close();
+    const match = (await results(folder)).at(-1);
+    assert.deepEqual([match.result, match.score], [result, { ...score, draws: 0, unknown: 1 }]);
+  }
+});
+
+test("a rejoin into a duel that started while the seat was away counts that duel", async (t) => {
+  const { seat, link, record, folder } = await setup(t);
+  await joinRoom(seat, link);
+  await playDuel(seat, link, { winner: 0 });
+  link.deliver(stocPacket(YGOProStocChangeSide));
+  const sided = await submitSide(seat, link);
+  link.serverClose();
+  await delay(20);
+  rejoinMidDuel(link, { lp: 8000, deck: 35 });
+  link.deliver(idle(0));
+  assert.equal(await sided.pending, "prompt");
+  const { match, board } = seat.snapshot();
+  assert.deepEqual([match.duel, board.duel, match.score], [2, 2, { me: 1, opponent: 0, draws: 0 }], "duel 2, not duel 1 again");
+  await record.flush();
+  assert.equal(JSON.parse(await readFile(join(folder, "seat.json"), "utf8")).duel, 2);
+  link.deliver(gamePacket(YGOProMsgWin, { player: 0, type: 1 }));
+  link.deliver(stocPacket(YGOProStocDuelEnd));
+  for (const replay of [1, 2]) link.deliver(Buffer.from([4, 0, 23, replay]));
+  assert.equal(await seat.wait(), "ended");
+  await seat.close();
+  const lines = await results(folder);
+  assert.deepEqual(lines.map((line) => [line.type, line.duel, line.result]), [["duel", 1, "win"], ["duel", 2, "win"], ["match", undefined, "win"]]);
+});
+
+test("a match that ends before the seat saw its last duel end reports that duel and the match as unknown", async (t) => {
+  const { seat, link, folder } = await setup(t);
+  await joinRoom(seat, link);
+  await startDuel(seat, link);
+  link.deliver(stocPacket(YGOProStocDuelEnd));
+  link.deliver(Buffer.from([4, 0, 23, 1]));
+  assert.equal(await seat.wait(), "ended");
+  await seat.close();
+  const lines = await results(folder);
+  assert.deepEqual(lines.map((line) => [line.type, line.result]), [["duel", "unknown"], ["match", "unknown"]]);
+  assert.deepEqual(lines[1].score, { me: 0, opponent: 0, draws: 0, unknown: 1 });
 });
 
 test("a seat stopped mid-match does not leave it: srvpro keeps the seat for a resume", async (t) => {

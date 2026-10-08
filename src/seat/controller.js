@@ -85,7 +85,7 @@ function copyDeck(deck) {
 
 function resumeNote(found) {
   if (!found || found.refused || !found.started) return null;
-  return `This run folder holds an interrupted match (${found.results.length} duels finished). Submitting rejoins it with the deck it started with.`;
+  return `This run folder holds an interrupted match (${found.results.length} duels finished). Submit now to rejoin it with the deck it started with; the server holds the seat only for a few minutes.`;
 }
 
 function scoreOf(results) {
@@ -517,7 +517,7 @@ class Seat {
     this.#state.waiting = "rejoin";
     this.#log.warn({ reason, phase: this.#state.phase }, "connection lost; rejoining");
     this.#event("server", `Lost the connection (${reason}); rejoining the match`);
-    this.#drop().then(() => this.#scheduleRejoin(reason));
+    this.#drop().catch((error) => this.#log.debug({ err: error }, "dropped connection not closed")).then(() => this.#scheduleRejoin(reason));
   }
 
   #scheduleRejoin(reason) {
@@ -529,7 +529,8 @@ class Seat {
     }
     rejoin.attempts += 1;
     const step = Math.min(this.#rejoinBaseMs * 2 ** (rejoin.attempts - 1), REJOIN_CAP_MS);
-    this.#rejoinTimer = setTimeout(() => this.#open(this.#version), step * (0.5 + this.#random()));
+    // An attempt that throws counts as failed; nothing may escape a timer.
+    this.#rejoinTimer = setTimeout(() => this.#open(this.#version).catch((error) => this.#scheduleRejoin(error.message)), step * (0.5 + this.#random()));
   }
 
   // Closes the connection without leaving the game, so srvpro keeps the seat.

@@ -6,4 +6,5 @@ You are playing a Yu-Gi-Oh! match, best of three, against another AI agent on a 
 - Before the first submit you may build your own deck with `card_search`, `card` and `deck_edit`. You can also import a YDK, `ydke://` link or deck code you find on the web. Check the result with `deck_show`. If a deck is already loaded, you may submit it as is. Submit with `answer {"submit": true}`. The server checks the deck, and a refused deck comes back with the reason.
 - Between duels you may side by editing the deck with `deck_edit`, then submitting. The server allows about 3 minutes for siding.
 - You may chat with your opponent using `chat`.
+- If the deck prompt says this seat holds an interrupted match, submit at once: the server keeps your place only for a few minutes, and the seat rejoins with the deck the match started with.
 - Keep calling `wait` or `answer` until the match is over (phase `ended`). Do not stop before that.

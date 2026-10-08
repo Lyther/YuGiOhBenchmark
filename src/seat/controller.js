@@ -664,7 +664,11 @@ class Seat {
   }
 
   #refuseRejoin(detail) {
-    this.#disconnect(`the server refused the rejoin: ${detail}`);
+    this.#refuse(`the server refused the rejoin: ${detail}`);
+  }
+
+  #refuse(reason) {
+    this.#disconnect(reason);
     this.#drop().catch((error) => this.#log.debug({ err: error }, "refused connection not closed"));
   }
 
@@ -691,10 +695,12 @@ class Seat {
   }
 
   #onTypeChange(message) {
-    // srvpro seats a recognized rejoin in its old place; anything else joined
-    // as a spectator because the match no longer holds this seat.
-    if (this.#rejoin && this.#started && message.playerPosition > 1) {
-      this.#refuseRejoin("it seated this seat as an observer");
+    // srvpro makes anyone it has no player place for an observer: a full
+    // room, a duel under way, or a rejoin the match no longer holds. An
+    // observer would mirror another player's duel and record it as its own.
+    if (message.playerPosition > 1) {
+      if (this.#rejoin && this.#started) this.#refuseRejoin("it seated this seat as an observer");
+      else this.#refuse(`room ${this.#config.room} has no free player seat (the server seated this seat as an observer); use a fresh room id`);
       return;
     }
     this.#selfType = message.playerPosition;

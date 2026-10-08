@@ -407,6 +407,23 @@ test("an opponent name with control characters is kept on one line", async (t) =
   assert.ok(seat.snapshot().events.every((event) => !/[\r\n]/.test(event.text)));
 });
 
+test("a seat the server makes an observer reports the full room and leaves", async (t) => {
+  const { seat, link, folder } = await setup(t);
+  const pending = seat.answer({ submit: true });
+  await tick();
+  // A third seat in a room whose duel was under way (live in room ob8e53bdd0).
+  link.deliver(stocPacket(YGOProStocJoinGame, { info: HOST_INFO }));
+  link.deliver(stocPacket(YGOProStocTypeChange, { type: OBSERVER }));
+  assert.equal(await pending, "disconnected");
+  assert.match(seat.snapshot().disconnect.reason, /no free player seat \(the server seated this seat as an observer\); use a fresh room id/);
+  assert.equal(link.open, false);
+  await delay(20);
+  assert.equal(link.connects.length, 1, "no rejoin");
+  await seat.close();
+  assert.deepEqual((await results(folder)).map((line) => [line.type, line.phase]), [["aborted", "lobby"]]);
+  assert.deepEqual((await readdir(folder)).filter((file) => file.endsWith(".ydk")), [], "no deck was accepted");
+});
+
 test("a submit into an existing run folder is refused before anything is sent", async (t) => {
   const { seat, link, folder } = await setup(t);
   await mkdir(folder, { recursive: true });

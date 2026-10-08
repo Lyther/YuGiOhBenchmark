@@ -9,7 +9,7 @@ const MAX_RECORD_BYTES = 0xffff;
 const DIGEST_CHARS = 8;
 const STATE_FILE = "seat.json";
 const DECK_FILE = /^duel-(\d+)\.ydk$/;
-const REPLAY_FILE = /^replay-\d+\.yrp$/;
+const REPLAY_FILE = /^replay-(\d+)\.yrp$/;
 const END_TYPES = new Set(["match", "aborted"]);
 const NEWLINE = 0x0a;
 
@@ -106,9 +106,11 @@ class Recorder {
       const found = DECK_FILE.exec(file);
       return found ? [[Number(found[1]), readFileSync(join(this.folder, file), "utf8")]] : [];
     }));
+    // Numbering goes on after the highest replay, past a gap a failed write left.
+    const replays = Math.max(0, ...files.map((file) => Number(REPLAY_FILE.exec(file)?.[1] ?? 0)));
     return {
       started: state.started === true, duel: state.duel ?? 0, turn: state.turn ?? 0,
-      results: lines.filter((line) => line.type === "duel"), decks, replays: files.filter((file) => REPLAY_FILE.test(file)).length,
+      results: lines.filter((line) => line.type === "duel"), decks, replays,
     };
   }
 

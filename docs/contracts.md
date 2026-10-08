@@ -117,7 +117,7 @@ Not stored anywhere: model reasoning, tool-call history (the runtime keeps it), 
   - `reason` is the catalog's `!victory` text for `reasonCode`, or `"#<code>"` if unknown.
   - Consumers must ignore unknown fields; new fields are only ever added.
 - **`duel-<n>.ydk`.** The standard YDK text of the deck sent for duel *n*, written at each successful submit. It is written under a temporary name and linked into place, so a hard stop leaves the whole file or none.
-- **`replay-<k>.yrp`.** The `STOC_REPLAY` payload bytes exactly as received, numbered in arrival order from 1. The server sends one per duel; the seat keeps whatever arrives and requires no count. These files are not re-encoded.
+- **`replay-<k>.yrp`.** The `STOC_REPLAY` payload bytes exactly as received, numbered in arrival order from 1 (a failed write can leave a gap; a resumed seat numbers on from the highest). The server sends one per duel; the seat keeps whatever arrives and requires no count. These files are not re-encoded.
 - **`session.bin`.** Written only when `YGO_CAPTURE=1`. Each received packet is stored as a record: `u32le` milliseconds since connect, `u16le` length, then the full packet bytes including the 2-byte length and 1-byte STOC id. It is the fixture format for `test/fixtures/sessions/`.
 - **Write failures.** An error event plus a log line; play continues.
 - **Retention.** Left to the operator. `runs/` is gitignored.

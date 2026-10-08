@@ -149,6 +149,22 @@ await createRecorder(${options}).deck(1, "#main\\n89631139\\n#extra\\n!side\\n")
   assert.equal((await readdir(runFolder(dir, "M,TM0,NF#abc123", "opus-seat"))).includes("duel-1.ydk"), false);
 });
 
+test("a resumed seat numbers replays on from the highest one, past a gap", async (t) => {
+  const dir = await runDir(t);
+  const make = () => createRecorder({ runDir: dir, room: "M,TM0,NF#abc123", name: "opus-seat" });
+  const first = make();
+  first.claim();
+  await first.checkpoint({ started: true, duel: 3 });
+  await first.close();
+  // Replay 2's write failed and the seat went on.
+  await writeFile(join(first.folder, "replay-1.yrp"), Uint8Array.from([1]));
+  await writeFile(join(first.folder, "replay-3.yrp"), Uint8Array.from([3]));
+  await seatState(first.folder, { pid: DEAD_PID });
+  const second = make();
+  assert.equal(second.claim().replays, 3);
+  assert.equal(await second.replay(Uint8Array.from([4])), 4);
+});
+
 test("session capture stores each packet with its millisecond offset and full bytes", async (t) => {
   const dir = await runDir(t);
   let clock = 1000;

@@ -122,6 +122,22 @@ test("a resumed seat cuts off a result line a hard stop left unfinished, so its 
   assert.deepEqual(lines.map((line) => JSON.parse(line).duel), [1, 2]);
 });
 
+test("a resumed seat keeps a whole last result line that lost only its newline", async (t) => {
+  const dir = await runDir(t);
+  const make = () => createRecorder({ runDir: dir, room: "M,TM0,NF#abc123", name: "opus-seat", now: fixedNow });
+  const first = make();
+  first.claim();
+  await first.checkpoint({ started: true, duel: 2 });
+  await first.close();
+  await appendFile(join(first.folder, "results.jsonl"), '{"type":"duel","duel":1,"result":"loss"}');
+  await seatState(first.folder, { pid: DEAD_PID });
+  const second = make();
+  assert.deepEqual(second.claim().results.map((line) => line.duel), [1]);
+  await second.result({ type: "duel", duel: 2, result: "win" });
+  const lines = (await readFile(join(second.folder, "results.jsonl"), "utf8")).split("\n").filter(Boolean);
+  assert.deepEqual(lines.map((line) => JSON.parse(line).duel), [1, 2]);
+});
+
 test("a deck write cut short leaves no deck file for a resume to choke on", { skip: process.platform === "win32" && "needs ulimit" }, async (t) => {
   const dir = await runDir(t);
   const options = JSON.stringify({ runDir: dir, room: "M,TM0,NF#abc123", name: "opus-seat" });

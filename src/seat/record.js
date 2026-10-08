@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { appendFile, link, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -45,16 +45,18 @@ function readJson(file) {
 }
 
 // A hard stop can cut the last line; a line that does not parse is skipped.
+function parseLine(line) {
+  try {
+    return [JSON.parse(line)];
+  } catch {
+    return [];
+  }
+}
+
 function readResults(folder) {
   const file = join(folder, "results.jsonl");
   const text = existsSync(file) ? readFileSync(file, "utf8") : "";
-  return text.split("\n").filter(Boolean).flatMap((line) => {
-    try {
-      return [JSON.parse(line)];
-    } catch {
-      return [];
-    }
-  });
+  return text.split("\n").filter(Boolean).flatMap(parseLine);
 }
 
 // The only writer of the run folder: results.jsonl lines, the submitted deck
@@ -123,7 +125,7 @@ class Recorder {
       for (const duel of found.decks.keys()) rmSync(join(this.folder, `duel-${duel}.ydk`));
       found.decks.clear();
     }
-    if (found) this.#cutPartialLine();
+    if (found) this.#endLastLine();
     this.#replays = found?.replays ?? 0;
     this.#seatState = { pid: process.pid, started: found?.started ?? false, duel: found?.duel ?? 0, turn: found?.turn ?? 0 };
     const temp = join(this.folder, `.${STATE_FILE}.tmp`);
@@ -133,12 +135,16 @@ class Recorder {
     return found;
   }
 
-  // readResults skips a line a hard stop cut; it is cut off the file too, so
-  // this seat's first line does not run on from it.
-  #cutPartialLine() {
+  // readResults reads a last line that lost only its newline and skips one a
+  // hard stop cut. The file is made to agree, so this seat's first line starts
+  // on a line of its own.
+  #endLastLine() {
     const file = join(this.folder, "results.jsonl");
     const bytes = existsSync(file) ? readFileSync(file) : null;
-    if (bytes?.length && bytes.at(-1) !== NEWLINE) truncateSync(file, bytes.lastIndexOf(NEWLINE) + 1);
+    if (!bytes?.length || bytes.at(-1) === NEWLINE) return;
+    const end = bytes.lastIndexOf(NEWLINE) + 1;
+    if (parseLine(bytes.subarray(end).toString("utf8")).length) appendFileSync(file, "\n");
+    else truncateSync(file, end);
   }
 
   #makeFolder() {

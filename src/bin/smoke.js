@@ -39,7 +39,20 @@ async function startSeat(label, { room, name, deck }) {
   });
   const client = new Client({ name: `smoke-${label}`, version: "0.0.0" });
   await client.connect(transport, { timeout: CALL_TIMEOUT_MS });
-  return client;
+  return { client, transport, options: { room, name, deck } };
+}
+
+// --restart: the seat process is killed at its first duel prompt, as a
+// crashed agent leaves it, and a new process must resume from the folder.
+async function restartSeat(label, seat) {
+  say(`${label}: killing the seat process at its first duel prompt`);
+  process.kill(seat.transport.pid, "SIGKILL");
+  await seat.client.close().catch(() => {});
+  const next = await startSeat(label, seat.options);
+  const offer = await call(next.client, "wait");
+  if (!/interrupted match/.test(offer.prompt?.text ?? "")) throw new Error(`${label}: the restarted seat did not offer to resume`);
+  say(`${label}: restarted; resuming the match`);
+  return { seat: next, view: await call(next.client, "answer", { submit: true }) };
 }
 
 function answerFor(label, prompt) {
@@ -53,10 +66,12 @@ function answerFor(label, prompt) {
 
 // Lobby prompts get fixed answers; at the first prompt of every duel the seat
 // surrenders. It never answers a duel prompt, so it is not a second player.
-async function drive(label, client) {
+async function drive(label, seats, restart) {
+  let { client } = seats[label];
   let view = await call(client, "wait");
   let chatted = false;
   let heard = false;
+  let restarted = !restart;
   const listen = (current) => {
     heard ||= current.events.some((event) => event.kind === "chat" && event.from === "opponent" && event.text.startsWith("smoke "));
     return current;
@@ -69,13 +84,17 @@ async function drive(label, client) {
     const prompt = view.prompt;
     if (!prompt) view = listen(await call(client, "wait"));
     else if (LOBBY_PROMPTS.has(prompt.kind)) view = listen(await call(client, "answer", answerFor(label, prompt)));
-    else {
+    else if (!restarted) {
+      restarted = true;
+      ({ seat: seats[label], view } = await restartSeat(label, seats[label]));
+      client = seats[label].client;
+    } else {
       say(`${label}: duel ${view.match.duel}, prompt ${prompt.kind}: surrendering`);
       view = listen(await call(client, "surrender"));
     }
   }
   say(`${label}: ${view.phase}${view.disconnected ? ` (${view.disconnected})` : ""}, score ${JSON.stringify(view.match.score)}, heard the other seat's chat: ${heard}`);
-  return { ...view, heard };
+  return { ...view, heard, restarted };
 }
 
 async function checkFolder(runDir, room, name) {
@@ -94,25 +113,28 @@ async function checkFolder(runDir, room, name) {
 }
 
 async function main() {
-  const { values } = parseArgs({ options: { room: { type: "string" }, deck: { type: "string" }, names: { type: "string" } } });
+  const { values } = parseArgs({
+    options: { room: { type: "string" }, deck: { type: "string" }, names: { type: "string" }, restart: { type: "boolean" } },
+  });
   const room = values.room ?? `M,TM0,NF#sm${randomBytes(4).toString("hex")}`;
   const suffix = randomBytes(2).toString("hex");
   const [nameA, nameB] = values.names?.split(",") ?? [`smoke-a-${suffix}`, `smoke-b-${suffix}`];
   const deck = values.deck ?? DEFAULT_DECK;
   const { runDir } = readConfig({ ...process.env, YGO_ROOM: room });
-  say(`room ${room} · seats ${nameA}, ${nameB} · deck ${deck}`);
-  const clients = [];
+  say(`room ${room} · seats ${nameA}, ${nameB} · deck ${deck}${values.restart ? " · seat b restarts" : ""}`);
+  const seats = {};
   const deadline = setTimeout(() => {
     say(`smoke run exceeded ${DEADLINE_MS / 60_000} minutes`);
     process.exit(1);
   }, DEADLINE_MS);
   try {
-    clients.push(await startSeat("a", { room, name: nameA, deck }));
-    clients.push(await startSeat("b", { room, name: nameB, deck }));
-    const views = await Promise.all([drive("a", clients[0]), drive("b", clients[1])]);
+    seats.a = await startSeat("a", { room, name: nameA, deck });
+    seats.b = await startSeat("b", { room, name: nameB, deck });
+    // Seat b wins rock-paper-scissors and goes first, so it gets the duel prompts.
+    const views = await Promise.all([drive("a", seats, false), drive("b", seats, values.restart)]);
     const checks = await Promise.all([checkFolder(runDir, room, nameA), checkFolder(runDir, room, nameB)]);
     for (const check of checks) say(`${check.folder}: ${check.duels} duels, ${check.replays} replays${check.missing.length ? `, missing ${check.missing.join(", ")}` : ""}`);
-    const ok = views.every((view) => view.phase === "ended" && view.heard) && checks.every((check) => check.missing.length === 0);
+    const ok = views.every((view) => view.phase === "ended" && view.heard && view.restarted) && checks.every((check) => check.missing.length === 0);
     say(ok ? "smoke: passed" : "smoke: failed");
     process.exitCode = ok ? 0 : 1;
   } catch (error) {
@@ -120,7 +142,7 @@ async function main() {
     process.exitCode = 1;
   } finally {
     clearTimeout(deadline);
-    await Promise.all(clients.map((client) => client.close().catch(() => {})));
+    await Promise.all(Object.values(seats).map(({ client }) => client.close().catch(() => {})));
   }
 }
 

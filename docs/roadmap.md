@@ -14,7 +14,11 @@ Last updated: 2026-10-07
 - Get two real models playing early. Before that, check only what model play needs: the wire, the MCP handshake and one model-free smoke run. Then fix what real matches find.
 - Register each tool once it works. There are no placeholder tools or "not available yet" paths.
 - Every step names its files, its proof, and what stays unproven. "Passed" means the command was run.
-- Live proofs use the real server and real seat processes. Offline tests use captured server bytes and real `ygopro-msg-encode` objects, never mocks.
+- Live proofs use the real server and real seat processes. Offline tests use captured bytes, constructed codec messages, controlled card data and connection doubles. They are diagnostics; real server and agent runs remain separate evidence.
+
+## Current Implementation
+
+Done on 2026-10-07: P1.1–P1.10 and P2.1, plus P3.2's prepared reports. The [transport/probe core](specs/core.md) came first; the rest was built test first against the [remaining-work spec](specs/remaining.md). The seat ran two live smoke matches on 2339 and connected to Claude Code and Codex. What is left needs agent matches: P1.11, P2.2 and P2.3, with P1.12's zone checks waiting on a real duel capture. See [status](status.md).
 
 ## Phase 0: Decision Closure
 
@@ -23,7 +27,7 @@ Objective: settle the decisions that would otherwise force rework.
 Exit gate: met on 2026-10-07.
 
 - [x] `P0.1` Adopt the peer2 line and confirm AD-01 (drop the WindBot relay).
-  - Done 2026-10-07: after peer#3's review and the corrections it led to, the user accepted the concept, this architecture and the Node seat as the source of truth, and the line was merged into `master`.
+  - Done 2026-10-07: after review corrections, the user accepted the concept, this architecture and the Node seat as the source of truth, and the line was merged into `master`.
 
 - [x] `P0.2` Contracts for the seat.
   - Done: [contracts.md](contracts.md) gives every tool an input schema, a result DTO, error cases and an example.
@@ -38,17 +42,17 @@ Exit gate:
 - Unproven: model-built decks and deck edits at side (Phase 2); cost (Phase 2).
 - Human input: launching the agents in P1.11.
 
-- [ ] `P1.1` Scaffold, config and logging.
+- [x] `P1.1` Scaffold, config and logging.
   - Files: `package.json`, `.gitignore`, `.env.example`, `src/config.js`, `src/log.js`, `test/config.test.js`.
   - Scope:
-    - Add exact-pinned `@modelcontextprotocol/server` 2.3.1, `zod` 4.6.5, `pino` 10.4.0, `ygopro-deck-encode` 1.0.16 and `ygopro-cdb-encode` 1.1.1, plus dev-only `@modelcontextprotocol/client` 2.3.1. This set was audited on 2026-10-07 with 0 vulnerabilities.
-    - Scripts `seat`, `smoke`, `cards`, `probe`, `test` (`node --test test`).
+    - Add exact-pinned `@modelcontextprotocol/server` 2.3.1, `zod` 4.6.5, `pino` 10.4.0, `ygopro-deck-encode` 1.0.16 and `ygopro-cdb-encode` 1.1.1, plus `@modelcontextprotocol/client` 2.3.1 for the smoke command. This set was audited on 2026-10-07 with 0 vulnerabilities.
+    - Scripts `seat`, `smoke`, `cards`, `probe`, `test` (`node --test "test/**/*.test.js"`).
     - Ignore `runs/`.
     - `config.js` covers every variable in contracts.md, with limits.
   - Acceptance evidence: `npm test` passes; `npm audit --omit=dev` reports 0; `config.test.js` covers defaults, limits and bad values.
   - Dependencies: P0.
 
-- [ ] `P1.2` Wire split and probe.
+- [x] `P1.2` Wire split and probe.
   - Files: `src/protocol/framing.js`, `src/protocol/packets.js`, `src/bin/probe.js`, `test/protocol/framing.test.js`, `test/protocol/packets.test.js`; remove `src/protocol/index.js` and `src/seat/join-room.js`.
   - Scope:
     - Move the framer.
@@ -58,13 +62,13 @@ Exit gate:
   - Acceptance evidence: `npm test`. `YGO_ROOM='M,TM0,NF#<id>' npm run probe` prints `mode 1`, `timeLimit 0`, `lflist 0`.
   - Dependencies: P1.1.
 
-- [ ] `P1.3` Connection.
+- [x] `P1.3` Connection.
   - Files: `src/net/connection.js`, `test/net/connection.test.js`.
   - Scope: connect timeout, ordered send, framing, parse, close reasons; no game state.
-  - Acceptance evidence: tests against a local `net.Server` cover split packets, an oversized packet, server close, and the connect timeout.
+  - Acceptance evidence: real local `net.Server` tests cover split/coalesced packets, malformed messages, partial EOF, refusal, ordered sends and close reasons. A real 1 ms connect attempt to 2339 exercised the timeout. The uint16 frame length cannot express an oversized 1 MiB packet.
   - Dependencies: P1.2.
 
-- [ ] `P1.4` Card data.
+- [x] `P1.4` Card data.
   - Files: `src/cards/catalog.js`, `src/cards/strings-conf.js`, `src/cards/sources.js`, `src/bin/cards.js`, `test/cards/catalog.test.js`, `test/cards/sources.test.js`, `test/fixtures/cards.json`.
   - Scope:
     - Download the contract's source list as individual files to temporary names, then rename; no archives.
@@ -73,13 +77,13 @@ Exit gate:
   - Acceptance evidence: `npm test`. `npm run cards` populates `data/cards/` and prints counts. A known code resolves to English text. A super-pre code resolves to the English community text when it exists, otherwise to MyCard's Chinese text, and its card info names the source. A failed download leaves the old files.
   - Dependencies: P1.1.
 
-- [ ] `P1.5` Deck model.
+- [x] `P1.5` Deck model.
   - Files: `src/deck/deck.js`, `test/deck/deck.test.js`, `decks/sample.ydk`.
   - Scope: YDK, `ydke://` and deck-code import and export; extra-deck placement by catalog type; the `UPDATE_DECK` payload; no legality checks. Add, remove and move edits come with the deck tools in P2.1.
   - Acceptance evidence: round-trip tests; `decks/sample.ydk` loads and encodes.
   - Dependencies: P1.4.
 
-- [ ] `P1.6` Controller and recorder.
+- [x] `P1.6` Controller and recorder.
   - Files: `src/seat/controller.js`, `src/seat/record.js`, `test/seat/controller.test.js`, `test/seat/record.test.js`.
   - Scope:
     - Phases `deck → lobby → rps → first → duel → side → ended | disconnected`, with the deck from `YGO_DECK`.
@@ -92,16 +96,16 @@ Exit gate:
     - Controller tests built from real `ygopro-msg-encode` objects show `DECKERROR`, `SIDEERROR` and `MSG_RETRY` coming back as rejected prompts (Q-03), keepalives answered on receipt, and `ended` held until the replays arrive, including after a one-duel match.
   - Dependencies: P1.3, P1.5.
 
-- [ ] `P1.7` Board, events and labels.
+- [x] `P1.7` Board, events and labels.
   - Files: `src/game/board.js`, `src/game/events.js`, `src/game/labels.js`, `test/game/board.test.js`, `test/game/events.test.js`.
   - Scope: the reducer for every zone-changing message listed in architecture Component View; per-duel me/opponent mapping from `MSG_START`; readable event records for every non-prompt message; selection-hint tracking; `unreadable` for unknown types; zone and card labels.
   - Acceptance evidence: every event kind and board delta is tested from real encoded messages.
   - Dependencies: P1.4.
 
-- [ ] `P1.8` Prompt builders.
+- [x] `P1.8` Prompt builders.
   - Files: `src/game/prompts/index.js`, `src/game/prompts/commands.js`, `src/game/prompts/selections.js`, `src/game/prompts/choices.js`, `src/game/prompts/places.js`, `test/game/prompts.test.js`.
   - Scope:
-    - All 19 response-bearing messages plus RPS, first/second, deck and side, with numbered options, labels, hint text and constraints. This includes tribute values, sum values and mode, and counter counts (contracts Answers).
+    - All 20 response-bearing messages plus RPS, first/second, deck and side, with numbered options, labels, hint text and constraints. This includes tribute values, sum values and mode, and counter counts (contracts Answers).
     - AD-07 auto-answers; `SELECT_SUM` padding (D-02).
   - Acceptance evidence:
     - For every type, a real encoded message builds the expected prompt, and `encode` produces stock-client bytes, including `SELECT_SUM` with must-select cards.
@@ -109,7 +113,7 @@ Exit gate:
     - Q-04: a zeroed opponent face-up candidate is labeled by name.
   - Dependencies: P1.7.
 
-- [ ] `P1.9` MCP surface.
+- [x] `P1.9` MCP surface.
   - Files: `src/mcp/server.js`, `src/mcp/tools.js`, `src/mcp/render.js`, `src/seat/view.js`, `src/bin/seat.js`, `test/mcp/tools.test.js`, `test/mcp/render.test.js`, `test/seat/view.test.js`.
   - Scope: register `wait`, `answer`, `card`, `card_search`, `chat` and `surrender`; text and JSON rendering; `anthropic/maxResultSizeChars` on every tool; one log line per call with the result size.
   - Acceptance evidence:
@@ -118,7 +122,7 @@ Exit gate:
     - `render.test.js`: every prompt kind renders.
   - Dependencies: P1.6, P1.8.
 
-- [ ] `P1.10` Plumbing checks (decides AD-03).
+- [x] `P1.10` Plumbing checks (decides AD-03).
   - Files: `src/bin/smoke.js`, `test/fixtures/sessions/*`, architecture Operations (exact flags).
   - Scope:
     - `npm run smoke -- --room 'M,TM0,NF#<id>'` with `YGO_CAPTURE=1`; commit the captured sessions as fixtures.
@@ -127,6 +131,11 @@ Exit gate:
   - Acceptance evidence: the smoke exits 0; the super-pre result is recorded in architecture Risks; runtime transcript excerpts or exit codes are recorded in architecture Operations; AD-03 moves to ACCEPTED.
   - If the handshake fails: switch `mcp/server.js` and `mcp/tools.js` to SDK v1 1.32.0 and repeat.
   - Dependencies: P1.9.
+  - Done 2026-10-07:
+    - Two smoke runs passed, `M,TM0,NF#smc1c37f09` (captured into `test/fixtures/sessions/`) and `M,TM0,NF#smedf73be1`.
+    - The second run's deck held the super-pre card 101306093, and 2339 accepted it.
+    - srvpro announced a 3-minute Side Deck limit.
+    - Claude Code 2.1.280 and Codex 0.159.2 each held one 240 s `answer` call through the seat and got the lobby view back. AD-03 is accepted.
 
 - [ ] `P1.11` First agent match.
   - Files: `prompts/play-match.md`, `README.md` (Run a match).
@@ -139,9 +148,15 @@ Exit gate:
 
 - [ ] `P1.12` Offline replay of captured matches.
   - Files: `test/seat/controller.test.js`, `test/protocol/packets.test.js`, `test/game/board.test.js`.
-  - Scope: feed the fixtures through parse, the controller and the board, with a recording connection stub that keeps outgoing packets for assertions. That stub is a test double of our own interface, not a mock of the server.
+  - Scope: feed the fixtures through parse, the controller and the board, with a recording connection stub that keeps outgoing packets for assertions. It replaces the live connection, so replaying captures is diagnostic and does not replace the live run.
   - Acceptance evidence: every captured STOC packet parses; phases match the live runs; each zone matches the next `UPDATE_DATA` for it, including duels where the first player changes; keepalives and auto-passes appear where the bytes require them.
   - Dependencies: P1.11.
+  - Partly done: `test/seat/sessions.test.js` parses every packet of both smoke captures and replays them through the controller to the live results. The zone checks need an agent match's capture, because the smoke duels end at their first prompt.
+
+- [x] `P1.13` Resume first (architecture AD-14; supersedes the deferred reconnect).
+  - Files: `src/seat/controller.js`, `src/seat/record.js`, `src/game/board.js`, `src/bin/seat.js`, `src/bin/smoke.js`, their tests, `test/fixtures/sessions/rejoin-a-*.bin`.
+  - Scope: a lost connection, a packet the seat cannot handle and a restarted seat rejoin through srvpro's reconnect; a stop mid-match does not send `LEAVE_GAME`; `seat.json` lets a new process resume the folder (contracts Rejoin).
+  - Acceptance evidence: `npm test` (live rejoin bytes replayed through the controller; mutation checks); `npm run smoke -- --restart` passed in `sm2cde4817` on 2026-10-08 with a `SIGKILL`ed seat that resumed and finished the match.
 
 ## Phase 2: Model-Built Decks and Tuning
 
@@ -153,7 +168,7 @@ Exit gate:
 - Unproven: anything statistical about models (rankings are deferred).
 - Human input: launching the agents and reading provider billing.
 
-- [ ] `P2.1` Deck tools and siding.
+- [x] `P2.1` Deck tools and siding.
   - Files: `src/deck/deck.js`, `src/mcp/tools.js` (`deck_show`, `deck_edit`), `src/seat/controller.js`, `test/deck/deck.test.js`, `test/mcp/tools.test.js`.
   - Scope: add, remove and move edits. The deck and side prompts use the same tools, and the tool list gains both.
   - Acceptance evidence: an offline `tools.test.js` flow imports `decks/sample.ydk`, edits it and shows it; the tool list snapshot has all eight tools.
@@ -176,18 +191,18 @@ Objective: someone new can install, refresh cards, run the smoke and run an agen
 Exit gate: a fresh clone follows README to a passing smoke run; stale status text is gone.
 
 - [ ] `P3.1` README and status.
-  - Files: `README.md`, `.env.example`, `docs/status.md`, `docs/checkouts.md`. The last two are uncommitted in the main working tree, so this is done with their owner.
+  - Files: `README.md`, `.env.example`, `docs/status.md`, `docs/checkouts.md`. The stale WindBot plan and removed-research links were corrected during the core cleanup. Full match instructions and fresh-clone proof remain for this phase.
   - Acceptance evidence: a fresh clone reaches a passing `npm run smoke` by following README. `docs/status.md` no longer names the WindBot relay as the plan, and neither file links to the removed `concept-zero-research.md`.
   - Dependencies: P2.
 
 - [ ] `P3.2` Upstream defect reports.
   - Scope: prepare reports for the `ygopro-msg-encode` `SELECT_SUM` padding and the `SELECT_COUNTER` matcher, each with a failing test.
   - Acceptance evidence: report text and tests ready. Filing upstream is an outward action and needs the user's go-ahead.
+  - Prepared 2026-10-07: [docs/upstream/ygopro-msg-encode.md](upstream/ygopro-msg-encode.md) and `spec/upstream-msg-encode.test.js`. These cover four defects: the two above, `SORT_CARD` writing the inverse order, and `SHUFFLE_SET_CARD` interleaving its two location arrays. Not filed.
   - Dependencies: P1.8.
 
 ## Later / Not Now
 
-- Reconnect after a seat crash. Trigger: a crash costs a real match. Deferred because it needs srvpro's reconnect flow and the same deck bytes, and nothing has crashed yet.
 - Narration, public rankings, RL training, cross-game memory. Deferred by the concept; reopen only with a concept change.
 - Bo1 rooms. Trigger: a Bo1 experiment. Only the room string changes (drop the `M`); the seat follows the server's match end and assumes no number of duels.
 - Batched results with a "more events waiting" note. Trigger: a runtime whose output limit cannot be raised. Every current runtime's limit is configurable (architecture D-01, AD-13).

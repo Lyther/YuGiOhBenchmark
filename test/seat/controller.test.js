@@ -516,7 +516,7 @@ function rejoinMidDuel(link, { lp, deck }) {
 }
 
 test("a packet the seat cannot handle reloads the duel through a rejoin and changes no score", async (t) => {
-  const { seat, link, folder } = await setup(t);
+  const { seat, link, record, folder } = await setup(t);
   await joinRoom(seat, link);
   await startDuel(seat, link);
   link.deliver(gamePacket(YGOProMsgNewTurn, { player: 0 }));
@@ -541,6 +541,11 @@ test("a packet the seat cannot handle reloads the duel through a rejoin and chan
   assert.deepEqual([...sent[0].deck.main, ...sent[0].deck.extra], [...DECK.main, ...DECK.extra]);
   const { board, match, waiting } = seat.snapshot();
   assert.deepEqual([match.duel, board.duel, board.turn, waiting], [1, 1, 2, null], "same duel, the seat's own turn count");
+  const events = seat.snapshot().events;
+  const restored = events.slice(events.findLastIndex((event) => /continues from the server's copy/.test(event.text)));
+  assert.deepEqual(restored.map((event) => event.kind), ["duel", "server"], "the restore stream's NEW_TURN starts no turn");
+  await record.flush();
+  assert.equal(JSON.parse(await readFile(join(folder, "seat.json"), "utf8")).turn, 2, "the resume checkpoint keeps the restored turn");
   assert.deepEqual(board.lp, { me: 5200, opponent: 8000 });
   assert.equal(board.sides.me.deck, 33);
   assert.equal(seat.snapshot().opponent, "gpt-seat");

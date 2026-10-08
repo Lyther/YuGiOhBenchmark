@@ -154,6 +154,9 @@ class Seat {
   #rejoins = 0;
   #faults = 0;
   #reloadTurn = null;
+  // From a reload's MSG_START to its MSG_RELOAD_FIELD the server rebuilds a
+  // duel in progress: those turns and phases are not new.
+  #restoring = false;
   #selfType = null;
   #ready = [false, false];
   #startSent = false;
@@ -797,9 +800,10 @@ class Seat {
     if (!board) return;
     const event = describeEvent(msg, { board, catalog: this.#catalog });
     const next = applyBoard(board, msg, { catalog: this.#catalog });
-    if (event) this.#event(event.kind, event.text);
+    const restoring = this.#restoring;
+    if (event && !restoring) this.#event(event.kind, event.text);
     this.#state.board = next;
-    if (next.turn !== board.turn && !this.#rejoin) this.#checkpoint({ turn: next.turn });
+    if (next.turn !== board.turn && !restoring) this.#checkpoint({ turn: next.turn });
   }
 
   // A rejoin's field reload (srvpro RequestField) restarts the stream with an
@@ -816,6 +820,7 @@ class Seat {
     this.#state.board = board;
     this.#state.phase = "duel";
     this.#state.prompt = null;
+    this.#restoring = reload;
     if (reload) {
       this.#reloadTurn = previous?.turn ?? this.#reloadTurn;
       this.#event("duel", `Duel ${duel} continues from the server's copy of the field`);
@@ -833,7 +838,9 @@ class Seat {
     const next = applyBoard(board, msg, { catalog: this.#catalog });
     if (this.#reloadTurn !== null) next.turn = this.#reloadTurn;
     this.#reloadTurn = null;
+    this.#restoring = false;
     this.#state.board = next;
+    this.#checkpoint({ duel: next.duel, turn: next.turn });
     this.#event("server", `The server reloaded the field: turn ${next.turn}, your LP ${next.lp.me}, opponent's LP ${next.lp.opponent}`);
   }
 

@@ -1,14 +1,20 @@
+import { createHash } from "node:crypto";
+import { mkdirSync } from "node:fs";
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 
 const UNSAFE = /[^A-Za-z0-9._-]/g;
 const MAX_RECORD_BYTES = 0xffff;
+const DIGEST_CHARS = 8;
 
 function segment(text) {
   const safe = text.replace(UNSAFE, "_");
   // "." and ".." would climb out of the run folder.
-  return /^\.*$/.test(safe) ? safe.replace(/\./g, "_") || "_" : safe;
+  const clean = /^\.*$/.test(safe) ? safe.replace(/\./g, "_") || "_" : safe;
+  // A name that lost characters keeps a digest, so 名前 and 名称 stay apart.
+  if (clean === text) return clean;
+  return `${clean}-${createHash("sha256").update(text).digest("hex").slice(0, DIGEST_CHARS)}`;
 }
 
 export function runFolder(runDir, room, name) {
@@ -41,6 +47,20 @@ class Recorder {
   #ensure() {
     this.#created ??= mkdir(this.folder, { recursive: true });
     return this.#created;
+  }
+
+  // Claims the folder for this seat. An existing folder means a rerun or a
+  // second seat with the same room and name, whose files would mix with these.
+  // Synchronous, so the join that follows keeps its order; it runs once.
+  claim() {
+    mkdirSync(dirname(this.folder), { recursive: true });
+    try {
+      mkdirSync(this.folder);
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      throw new Error(`run folder ${this.folder} already exists; use a fresh room id or another YGO_NAME`, { cause: error });
+    }
+    this.#created = Promise.resolve();
   }
 
   #queue(write) {

@@ -297,6 +297,13 @@ class Seat {
   }
 
   async #join() {
+    // Claim the run folder before contacting the server: a rerun or a seat
+    // with a colliding name must not mix its files into another match's.
+    try {
+      this.#record.claim();
+    } catch (error) {
+      throw new SeatError(error.message);
+    }
     this.#state.phase = "lobby";
     this.#state.submitted = copyDeck(this.#state.deck);
     await this.#open(this.#config.version);

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -293,6 +293,15 @@ test("a one-duel match ends after its single replay, and a missing replay ends a
   const waiting = closed.seat.wait();
   closed.link.serverClose();
   assert.equal(await waiting, "ended", "the server closing after DUEL_END ends the wait");
+});
+
+test("a submit into an existing run folder is refused before anything is sent", async (t) => {
+  const { seat, link, folder } = await setup(t);
+  await mkdir(folder, { recursive: true });
+  await assert.rejects(seat.answer({ submit: true }), (error) => error instanceof SeatError && /already exists/.test(error.message));
+  assert.equal(link.connects.length, 0);
+  assert.equal(seat.snapshot().phase, "deck");
+  assert.equal(seat.snapshot().prompt.kind, "deck", "the deck prompt stays open");
 });
 
 test("a disconnect mid-duel is a phase with a reason and an aborted line", async (t) => {

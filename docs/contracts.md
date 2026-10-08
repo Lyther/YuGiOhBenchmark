@@ -98,8 +98,8 @@ Not stored anywhere: model reasoning, tool-call history (the runtime keeps it), 
 
 - **Folder:** `<YGO_RUN_DIR>/<roomId>/<name>/`.
   - `roomId` is the part of `YGO_ROOM` after `#`.
-  - Both `roomId` and `name` are reduced to `[A-Za-z0-9._-]`, with other characters replaced by `_`.
-  - The folder is created at the first deck submit.
+  - Both `roomId` and `name` are reduced to `[A-Za-z0-9._-]`, with other characters replaced by `_`. A part that changed this way gets `-` and the first 8 hex digits of its SHA-256, so names that differ stay apart.
+  - The folder is claimed at the first deck submit. If it already exists (a rerun, or another seat with the same room and name), that submit fails with an error and nothing is sent to the server.
 - **`results.jsonl`.** UTF-8, one JSON object per line, append-only:
   - `{"type":"duel","room":"M,TM0,NF#abc123","duel":1,"result":"win","reason":"LP reached 0","reasonCode":1,"turns":7,"first":true,"at":"2026-10-07T12:00:00.000Z"}`
   - `{"type":"match","room":"M,TM0,NF#abc123","result":"win","score":{"me":2,"opponent":1,"draws":0},"opponent":"gpt-seat","at":"…"}`, written once when the server ends the match, whether that took one, two or three duels.

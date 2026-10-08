@@ -16,9 +16,20 @@ const fixedNow = () => new Date("2026-10-07T12:00:00.000Z");
 
 test("the run folder is the sanitized room id and player name", () => {
   assert.equal(runFolder("/runs", "M,TM0,NF#abc123", "opus-seat"), join("/runs", "abc123", "opus-seat"));
-  assert.equal(runFolder("/runs", "M,TM0,NF#a/b c", "名前"), join("/runs", "a_b_c", "__"));
-  assert.equal(runFolder("/runs", "M,TM0,NF#..", ".."), join("/runs", "__", "__"), "no path traversal");
+  assert.match(runFolder("/runs", "M,TM0,NF#a/b c", "名前"), /^\/runs\/a_b_c-[0-9a-f]{8}\/__-[0-9a-f]{8}$/);
+  assert.notEqual(runFolder("/runs", "r", "名前"), runFolder("/runs", "r", "名称"), "names that sanitize alike stay distinct");
+  assert.match(runFolder("/runs", "M,TM0,NF#..", ".."), /^\/runs\/__-[0-9a-f]{8}\/__-[0-9a-f]{8}$/, "no path traversal");
   assert.equal(runFolder("/runs", "plainroom", "x"), join("/runs", "plainroom", "x"));
+});
+
+test("a run folder is claimed once, so a rerun or a colliding seat cannot mix into it", async (t) => {
+  const dir = await runDir(t);
+  const first = createRecorder({ runDir: dir, room: "M,TM0,NF#abc123", name: "opus-seat" });
+  first.claim();
+  await first.result({ type: "duel", duel: 1 });
+  const again = createRecorder({ runDir: dir, room: "M,TM0,NF#abc123", name: "opus-seat" });
+  assert.throws(() => again.claim(), /already exists.*fresh room id or another YGO_NAME/);
+  assert.deepEqual(await readdir(join(dir, "abc123")), ["opus-seat"]);
 });
 
 test("results are appended as JSON lines and decks and replays are written once each", async (t) => {

@@ -40,6 +40,7 @@ export class SeatError extends Error {}
 
 const REPLAY_GRACE_MS = 15_000;
 const OBSERVER = 7;
+const LOST_CONNECTION = 0x4;
 const PLAYER_TYPES = 4;
 const RPS_NAMES = Object.fromEntries(RPS_CHOICES.map(([label, value]) => [value, label]));
 const SIDE_REFUSED = "the Side Deck was refused: keep the same Main, Extra and Side counts and only swap cards between them";
@@ -114,6 +115,8 @@ class Seat {
   #duelsPlayed = 0;
   #replaysReceived = 0;
   #decksRecorded = new Set();
+  #sideSubmitted = false;
+  #forfeit = null;
   #finished = null;
   #state;
 
@@ -291,6 +294,7 @@ class Seat {
   #submitDeck(side) {
     this.#state.submitted = copyDeck(this.#state.deck);
     this.#send(encodeUpdateDeck(this.#state.deck));
+    this.#sideSubmitted = side;
     if (side) return;
     this.#state.phase = "lobby";
     this.#send(encodeReady());
@@ -390,6 +394,7 @@ class Seat {
       return;
     }
     if (message.msg === ErrorMessageType.SIDEERROR) {
+      this.#sideSubmitted = false;
       this.#event("rejected", SIDE_REFUSED);
       this.#setPrompt({ ...lobbyPrompt("side", { text: this.#sideText() }), rejected: SIDE_REFUSED });
       return;
@@ -464,8 +469,10 @@ class Seat {
     this.#record.deck(duel, text).catch((error) => this.#writeFailed(`duel-${duel}.ydk`, error));
   }
 
+  // A seat that leaves while siding also makes the server send DUEL_START to
+  // whoever has not submitted; that is no accepted deck.
   #onDuelStart() {
-    if (this.#state.phase === "side") this.#deckAccepted(this.#state.match.duel + 1);
+    if (this.#state.phase === "side" && this.#sideSubmitted) this.#deckAccepted(this.#state.match.duel + 1);
   }
 
   #onSelectHand() {
@@ -487,6 +494,7 @@ class Seat {
   }
 
   #onChangeSide() {
+    this.#sideSubmitted = false;
     this.#state.phase = "side";
     this.#setPrompt(lobbyPrompt("side", { text: this.#sideText() }));
   }
@@ -528,11 +536,14 @@ class Seat {
     clearTimeout(this.#replayTimer);
     this.#replayTimer = null;
     const { score } = this.#state.match;
-    const result = score.me > score.opponent ? "win" : score.me < score.opponent ? "loss" : "draw";
+    const byScore = score.me > score.opponent ? "win" : score.me < score.opponent ? "loss" : "draw";
+    const result = this.#forfeit ?? byScore;
     this.#state.phase = "ended";
     this.#state.waiting = null;
-    this.#event("duel", `The match is over: ${result}, ${score.me}-${score.opponent}${score.draws ? ` with ${score.draws} draws` : ""}`);
-    this.#writeResult({ type: "match", result, score: { ...score }, opponent: this.#state.opponent });
+    const how = this.#forfeit ? " by forfeit" : "";
+    this.#event("duel", `The match is over: ${result}${how}, ${score.me}-${score.opponent}${score.draws ? ` with ${score.draws} draws` : ""}`);
+    const forfeit = this.#forfeit ? { forfeit: true } : {};
+    this.#writeResult({ type: "match", result, score: { ...score }, opponent: this.#state.opponent, ...forfeit });
     // The run folder must be complete before any call reports the match over.
     this.#finished = this.#record.flush().catch((error) => this.#writeFailed("the run folder", error));
     this.#finished.then(() => this.#wake("ended"));
@@ -583,12 +594,22 @@ class Seat {
 
   #onWin(msg) {
     const { board, match } = this.#state;
-    const me = board?.me ?? 0;
+    // In a duel the server numbers players by duel position. Outside one it
+    // has restored lobby positions (single_duel.cpp siding and LeaveGame).
+    const inDuel = this.#state.phase === "duel";
+    const me = (inDuel ? board?.me : this.#selfType) ?? 0;
     const result = msg.player === me ? "win" : msg.player === 1 - me ? "loss" : "draw";
+    const reason = this.#catalog.victoryReason(msg.type) ?? `#${msg.type}`;
+    // A lost connection ends the whole match: the player who stayed wins it.
+    if (msg.type === LOST_CONNECTION) this.#forfeit = result;
+    if (!inDuel) {
+      this.#state.prompt = null;
+      this.#event("win", `The match ended before duel ${match.duel + 1} was played: you ${result === "win" ? "win" : "lose"} it (${reason})`);
+      return;
+    }
     if (result === "win") match.score.me += 1;
     else if (result === "loss") match.score.opponent += 1;
     else match.score.draws += 1;
-    const reason = this.#catalog.victoryReason(msg.type) ?? `#${msg.type}`;
     const line = { duel: match.duel, result, reason, reasonCode: msg.type, turns: board?.turn ?? 0, first: me === 0 };
     match.results.push(line);
     const event = board && describeEvent(msg, { board, catalog: this.#catalog });

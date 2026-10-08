@@ -295,6 +295,53 @@ test("a one-duel match ends after its single replay, and a missing replay ends a
   assert.equal(await waiting, "ended", "the server closing after DUEL_END ends the wait");
 });
 
+async function results(folder) {
+  return (await readFile(join(folder, "results.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+}
+
+test("an opponent who leaves while we side forfeits the match, read in lobby positions", async (t) => {
+  const { seat, link, folder } = await setup(t);
+  await joinRoom(seat, link);
+  await playDuel(seat, link, { winner: 0, me: 1 });
+  link.deliver(stocPacket(YGOProStocChangeSide));
+  assert.equal(await seat.wait(), "prompt");
+  // single_duel.cpp LeaveGame while siding: DUEL_START to the unready seat,
+  // then MSG_WIN for 1 - (leaver's lobby position 1), which is our position 0.
+  link.deliver(stocPacket(YGOProStocDuelStart));
+  link.deliver(gamePacket(YGOProMsgWin, { player: 0, type: 4 }));
+  link.deliver(stocPacket(YGOProStocDuelEnd));
+  link.deliver(Buffer.from([4, 0, 23, 1, 2, 3]));
+  assert.equal(await seat.wait(), "ended");
+  await seat.close();
+  const lines = await results(folder);
+  assert.deepEqual(lines.map((line) => [line.type, line.result]), [["duel", "loss"], ["match", "win"]]);
+  assert.deepEqual(lines[1].score, { me: 0, opponent: 1, draws: 0 });
+  assert.equal(lines[1].forfeit, true);
+  assert.deepEqual((await readdir(folder)).filter((file) => file.endsWith(".ydk")), ["duel-1.ydk"], "no deck for a duel never submitted");
+});
+
+test("an opponent who disconnects mid-duel forfeits the match even when it led", async (t) => {
+  const { seat, link, folder } = await setup(t);
+  await joinRoom(seat, link);
+  await playDuel(seat, link, { winner: 1 });
+  link.deliver(stocPacket(YGOProStocChangeSide));
+  await seat.wait();
+  const side = seat.answer({ submit: true });
+  await tick();
+  link.deliver(stocPacket(YGOProStocDuelStart));
+  await startDuel(seat, link, 0);
+  link.deliver(gamePacket(YGOProMsgWin, { player: 0, type: 4 }));
+  link.deliver(stocPacket(YGOProStocDuelEnd));
+  link.deliver(Buffer.from([4, 0, 23, 1]));
+  link.deliver(Buffer.from([4, 0, 23, 2]));
+  assert.equal(await side, "ended");
+  await seat.close();
+  const lines = await results(folder);
+  assert.deepEqual(lines.map((line) => [line.type, line.result]), [["duel", "loss"], ["duel", "win"], ["match", "win"]]);
+  assert.equal(lines[1].reason, "Lost connection");
+  assert.equal(lines[2].forfeit, true);
+});
+
 test("a submit into an existing run folder is refused before anything is sent", async (t) => {
   const { seat, link, folder } = await setup(t);
   await mkdir(folder, { recursive: true });

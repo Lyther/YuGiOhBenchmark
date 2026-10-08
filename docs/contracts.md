@@ -103,6 +103,7 @@ Not stored anywhere: model reasoning, tool-call history (the runtime keeps it), 
 - **`results.jsonl`.** UTF-8, one JSON object per line, append-only:
   - `{"type":"duel","room":"M,TM0,NF#abc123","duel":1,"result":"win","reason":"LP reached 0","reasonCode":1,"turns":7,"first":true,"at":"2026-10-07T12:00:00.000Z"}`
   - `{"type":"match","room":"M,TM0,NF#abc123","result":"win","score":{"me":2,"opponent":1,"draws":0},"opponent":"gpt-seat","at":"…"}`, written once when the server ends the match, whether that took one, two or three duels.
+    - A lost connection (`reasonCode` 4) ends the match. The player who stayed wins it whatever the score, and the line adds `"forfeit":true`. A leave between duels adds no `duel` line, because no duel was played.
   - `{"type":"aborted","room":"…","phase":"duel","duel":2,"reason":"server-closed","at":"…"}`, written once if the seat disconnects before `match`.
   - `reason` is the catalog's `!victory` text for `reasonCode`, or `"#<code>"` if unknown.
   - Consumers must ignore unknown fields; new fields are only ever added.

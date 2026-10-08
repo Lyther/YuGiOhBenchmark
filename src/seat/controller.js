@@ -380,9 +380,9 @@ class Seat {
     else this.#send(encodeResponse(action.bytes));
   }
 
-  #submitDeck(side) {
-    this.#state.submitted = copyDeck(this.#state.deck);
-    this.#send(encodeUpdateDeck(this.#state.deck));
+  #submitDeck(side, deck = this.#state.deck) {
+    this.#state.submitted = copyDeck(deck);
+    this.#send(encodeUpdateDeck(deck));
     // srvpro checks a rejoin against the last deck sent before the first duel.
     if (!this.#started) this.#startDeck = this.#state.submitted;
     this.#sideSubmitted = side;
@@ -685,8 +685,9 @@ class Seat {
     const banlist = info.lflist ? `banlist ${info.lflist}` : "no banlist";
     const clock = info.time_limit ? `${info.time_limit} s clock` : "no clock";
     this.#event("lobby", `Joined room ${this.#config.room}: ${format}, ${banlist}, ${clock}`);
-    // After a refused deck the model resubmits; otherwise the join submits.
-    if (this.#state.phase !== "deck") this.#submitDeck(false);
+    // After a refused deck the model resubmits; otherwise the join sends the
+    // deck it submitted, not edits made since (2339 deals whatever is sent).
+    if (this.#state.phase !== "deck") this.#submitDeck(false, this.#state.submitted ?? this.#state.deck);
   }
 
   #onTypeChange(message) {

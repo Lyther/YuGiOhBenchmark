@@ -835,6 +835,26 @@ test("before the first duel a lost connection joins afresh, and a stopped seat l
   assert.equal(await readFile(join(folder, "results.jsonl"), "utf8").catch(() => ""), "");
 });
 
+test("a join sends the deck the model submitted, not edits made since", async (t) => {
+  const { seat, link } = await setup(t);
+  const sentDecks = () => link.take().filter((packet) => packet instanceof YGOProCtosUpdateDeck).map(({ deck }) => [...deck.main, ...deck.extra]);
+  const edited = { ...DECK, main: [...DECK.main, BLUE_EYES] };
+  const pending = seat.answer({ submit: true });
+  // An edit while the join is in flight (2339 dealt it: room dead202a0d).
+  seat.setDeck(edited);
+  await tick();
+  link.deliver(stocPacket(YGOProStocJoinGame, { info: HOST_INFO }));
+  assert.deepEqual(sentDecks(), [[...DECK.main, ...DECK.extra]]);
+  // A drop in the lobby joins afresh before duel 1 (room ded2876773).
+  link.serverClose();
+  await delay(20);
+  link.deliver(stocPacket(YGOProStocJoinGame, { info: HOST_INFO }));
+  assert.deepEqual(sentDecks(), [[...DECK.main, ...DECK.extra]]);
+  assert.deepEqual(seat.snapshot().deck.main, edited.main, "the edit waits for the next submit");
+  await seat.close();
+  assert.equal(await pending, "disconnected");
+});
+
 test("one blocking call at a time; surrender only in a duel", async (t) => {
   const { seat, link } = await setup(t);
   await joinRoom(seat, link);

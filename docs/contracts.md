@@ -195,7 +195,7 @@ Rules shared by all tools:
   - `import` replaces the deck and accepts YDK text, a `ydke://` URL or a KoishiPro deck code.
   - A name must resolve to exactly one catalog card (case-insensitive exact name, then a unique prefix). Otherwise the call is an error that lists up to 5 suggestions.
   - `add` without a section puts Fusion/Synchro/Xyz/Link cards in extra and everything else in main.
-  - Edits are allowed in any phase; only the submitted deck matters.
+  - Edits are allowed in any phase; only the submitted deck matters. A join, including a rejoin before the first duel, sends the deck last submitted, never later edits.
 - **Result:** DeckView.
 
 ### `card`

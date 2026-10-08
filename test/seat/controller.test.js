@@ -3,7 +3,7 @@ import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { setImmediate as tick } from "node:timers/promises";
+import { setTimeout as delay, setImmediate as tick } from "node:timers/promises";
 
 import {
   DeckErrorType,
@@ -281,7 +281,10 @@ test("a one-duel match ends after its single replay, and a missing replay ends a
   await joinRoom(late.seat, late.link);
   await playDuel(late.seat, late.link, { winner: 0 });
   late.link.deliver(stocPacket(YGOProStocDuelEnd));
-  assert.equal(await late.seat.wait(), "ended");
+  // The seat's timers are unref'd. A live socket keeps the process running
+  // meanwhile; the link double does not, and Node 22 would cancel the test.
+  const [lateReason] = await Promise.all([late.seat.wait(), delay(200)]);
+  assert.equal(lateReason, "ended");
 
   const closed = await setup(t, { replayGraceMs: 10_000 });
   await joinRoom(closed.seat, closed.link);

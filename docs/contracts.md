@@ -42,7 +42,7 @@ All entities live in one seat process and die with it, except the run-folder fil
     - `duel → side` (`CHANGE_SIDE`);
     - `side → first | duel` (next duel);
     - `duel | side → ended` (`DUEL_END`, then the replay wait in architecture Runtime View);
-    - any phase → `disconnected` (a refused join, or a rejoin that was refused or ran out of attempts; see Rejoin).
+    - any phase → `disconnected` (a refused join, or a rejoin that was refused or ran out of attempts; see Rejoin). A join the server answers by making the seat an observer is refused: the room has no free player place, and an observer would mirror another player's duel.
 
     A lost connection or a server packet the seat could not handle changes no phase: the seat rejoins with `waiting: rejoin`.
 

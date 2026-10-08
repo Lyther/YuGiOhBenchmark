@@ -440,6 +440,8 @@ class Seat {
       await this.#drop();
       return;
     }
+    // Its onClose reports a connection that is already gone.
+    if (this.#connection.closed) return;
     this.#record.startCapture();
     this.#connection.send(encodePlayerInfo(this.#config.name));
     this.#connection.send(encodeJoinGame(version, this.#config.room));
@@ -523,6 +525,8 @@ class Seat {
   #scheduleRejoin(reason) {
     const rejoin = this.#rejoin;
     if (!rejoin || this.#closing) return;
+    // One retry is pending at a time.
+    clearTimeout(this.#rejoinTimer);
     if (rejoin.attempts >= REJOIN_ATTEMPTS) {
       this.#disconnect(`could not rejoin after ${REJOIN_ATTEMPTS} attempts (first: ${rejoin.reason}; last: ${reason})`);
       return;
@@ -542,12 +546,17 @@ class Seat {
     if (connection && !connection.closed) await connection.close();
   }
 
-  #disconnect(reason) {
-    const phase = this.#state.phase;
-    if (phase === "ended" || phase === "disconnected") return;
+  // The rejoin succeeded or gave up: no pending retry or deadline acts later.
+  #endRejoin() {
     this.#rejoin = null;
     clearTimeout(this.#rejoinTimer);
     clearTimeout(this.#restoreTimer);
+  }
+
+  #disconnect(reason) {
+    const phase = this.#state.phase;
+    if (phase === "ended" || phase === "disconnected") return;
+    this.#endRejoin();
     this.#state.phase = "disconnected";
     this.#state.disconnect = { reason };
     this.#state.prompt = null;
@@ -624,7 +633,7 @@ class Seat {
       this.#restoreTimer = setTimeout(() => this.#refuseRejoin(`it did not restore the match within ${RESTORE_MS / 1000} s`), this.#restoreMs);
       return;
     }
-    this.#rejoin = null;
+    this.#endRejoin();
     this.#state.waiting = null;
     const format = ["single duel", "match (Bo3)", "tag duel"][info.mode] ?? `mode ${info.mode}`;
     const banlist = info.lflist ? `banlist ${info.lflist}` : "no banlist";
@@ -682,8 +691,7 @@ class Seat {
   // whoever has not submitted; that is no accepted deck.
   #onDuelStart() {
     if (this.#rejoin) {
-      clearTimeout(this.#restoreTimer);
-      this.#rejoin = null;
+      this.#endRejoin();
       this.#state.waiting = null;
       this.#event("server", "Back in the match; the server resends the board and any pending prompt");
       return;

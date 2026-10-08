@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -50,6 +52,7 @@ import {
 
 import { AnswerError } from "../../src/game/prompts/index.js";
 import { createLogger } from "../../src/log.js";
+import { openConnection } from "../../src/net/connection.js";
 import { createSeat, SeatError } from "../../src/seat/controller.js";
 import { createRecorder } from "../../src/seat/record.js";
 import { fixtureCatalog } from "../helpers/fixture-catalog.js";
@@ -70,8 +73,9 @@ async function setup(t, overrides = {}) {
   const link = createLink();
   const record = createRecorder({ runDir, room: ROOM, name: NAME });
   const config = { host: "koishi.example", port: 2339, name: NAME, room: ROOM, version: 0x1362, waitMs: 2000, ...overrides.config };
+  const connect = overrides.connect ? (options) => overrides.connect(options, link) : link.connect;
   const seat = createSeat({
-    config, catalog, deck: DECK, record, connect: link.connect, log,
+    config, catalog, deck: DECK, record, connect, log,
     replayGraceMs: overrides.replayGraceMs ?? 40, rejoinBaseMs: overrides.rejoinBaseMs ?? 1, random: () => 0.5,
     restoreMs: overrides.restoreMs ?? 15_000,
   });
@@ -80,7 +84,16 @@ async function setup(t, overrides = {}) {
     await seat.close();
     await rm(runDir, { recursive: true, force: true });
   });
-  return { seat, link, folder: record.folder };
+  return { seat, link, record, folder: record.folder };
+}
+
+// A real TCP port that nothing listens on: a connect to it is refused.
+async function closedPort() {
+  const server = net.createServer().listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const { port } = server.address();
+  await new Promise((resolve) => server.close(resolve));
+  return port;
 }
 
 const types = (packets) => packets.map((packet) => packet.constructor);
@@ -425,6 +438,26 @@ test("a lost connection is rejoined with backoff; only when every attempt fails 
   await seat.close();
   const lines = await results(folder);
   assert.deepEqual(lines.map((line) => [line.type, line.phase]), [["aborted", "duel"]]);
+});
+
+test("each refused real TCP rejoin is one attempt, and none follows the last", { timeout: 5000 }, async (t) => {
+  const port = await closedPort();
+  const attempts = [];
+  const { seat, link } = await setup(t, {
+    connect: (options, link) => {
+      if (!link.connects.length) return link.connect(options);
+      attempts.push(seat.snapshot().phase);
+      return openConnection({ ...options, host: "127.0.0.1", port });
+    },
+  });
+  await joinRoom(seat, link);
+  await startDuel(seat, link);
+  const waiting = seat.wait();
+  link.serverClose();
+  assert.equal(await waiting, "disconnected");
+  assert.match(seat.snapshot().disconnect.reason, /could not rejoin after 6 attempts .*ECONNREFUSED/);
+  await delay(100);
+  assert.deepEqual(attempts, Array(6).fill("duel"), "six connects, all before the seat gave up");
 });
 
 test("a chat wake followed by match-end packets still waits for the run-folder writes", async (t) => {

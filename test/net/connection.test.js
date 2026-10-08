@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import net from "node:net";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { YGOProStocChat } from "ygopro-msg-encode";
 
@@ -128,18 +129,17 @@ test("local close flushes queued writes and reports local exactly once", { timeo
   assert.deepEqual(reasons, ["local"]);
 });
 
-test("a refused real TCP connection rejects and closes with its error", { timeout: 3000 }, async (t) => {
+test("a refused real TCP connection is reported once, by the rejection", { timeout: 3000 }, async (t) => {
   const peer = await listen(t, () => { });
   await new Promise((resolve) => peer.server.close(resolve));
-  let finish;
-  const closed = new Promise((resolve) => { finish = resolve; });
+  const closes = [];
   await assert.rejects(openConnection({
     ...peer,
     onMessage: () => assert.fail("no server is listening"),
     onError: (error) => assert.fail(error.message),
-    onClose: finish,
+    onClose: (closed) => closes.push(closed),
   }), { code: "ECONNREFUSED" });
-  const result = await closed;
-  assert.equal(result.reason, "error");
-  assert.equal(result.error.code, "ECONNREFUSED");
+  // The socket's close event follows its error; a second report would land here.
+  await delay(50);
+  assert.deepEqual(closes, [], "a caller that retries on the rejection must not retry on a close as well");
 });

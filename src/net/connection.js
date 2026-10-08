@@ -49,12 +49,17 @@ export function openConnection({ host, port, timeoutMs = 8000, onMessage, onClos
     socket.once("close", () => {
       clearTimeout(connectTimer);
       clearTimeout(closeTimer);
+      finishClose();
+      // A connect that fails is reported once, by the rejection; onClose is
+      // the end of a connection that opened.
+      if (!connected) {
+        reject(failure ?? new Error("server closed before connecting"));
+        return;
+      }
       if (reason === "server-closed" && framer.pending.length) {
         reason = "error";
         failure = new Error("server closed during a packet");
       }
-      if (!connected) reject(failure ?? new Error("server closed before connecting"));
-      finishClose();
       onClose?.({ reason, error: failure });
     });
     socket.on("data", (chunk) => {

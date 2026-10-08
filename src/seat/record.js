@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { appendFile, mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -11,6 +11,7 @@ const STATE_FILE = "seat.json";
 const DECK_FILE = /^duel-(\d+)\.ydk$/;
 const REPLAY_FILE = /^replay-\d+\.yrp$/;
 const END_TYPES = new Set(["match", "aborted"]);
+const NEWLINE = 0x0a;
 
 function segment(text) {
   const safe = text.replace(UNSAFE, "_");
@@ -122,6 +123,7 @@ class Recorder {
       for (const duel of found.decks.keys()) rmSync(join(this.folder, `duel-${duel}.ydk`));
       found.decks.clear();
     }
+    if (found) this.#cutPartialLine();
     this.#replays = found?.replays ?? 0;
     this.#seatState = { pid: process.pid, started: found?.started ?? false, duel: found?.duel ?? 0, turn: found?.turn ?? 0 };
     const temp = join(this.folder, `.${STATE_FILE}.tmp`);
@@ -129,6 +131,14 @@ class Recorder {
     renameSync(temp, join(this.folder, STATE_FILE));
     this.#created = Promise.resolve();
     return found;
+  }
+
+  // readResults skips a line a hard stop cut; it is cut off the file too, so
+  // this seat's first line does not run on from it.
+  #cutPartialLine() {
+    const file = join(this.folder, "results.jsonl");
+    const bytes = existsSync(file) ? readFileSync(file) : null;
+    if (bytes?.length && bytes.at(-1) !== NEWLINE) truncateSync(file, bytes.lastIndexOf(NEWLINE) + 1);
   }
 
   #makeFolder() {

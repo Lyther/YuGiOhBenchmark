@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -103,6 +103,23 @@ test("results are appended as JSON lines and decks and replays are written once 
   assert.equal(lines[1].type, "match");
   assert.equal(lines[1].room, "M,TM0,NF#abc123");
   await assert.rejects(recorder.deck(1, "#main\n"), /exists/, "a written deck is never overwritten");
+});
+
+test("a resumed seat cuts off a result line a hard stop left unfinished, so its own lines parse", async (t) => {
+  const dir = await runDir(t);
+  const make = () => createRecorder({ runDir: dir, room: "M,TM0,NF#abc123", name: "opus-seat", now: fixedNow });
+  const first = make();
+  first.claim();
+  await first.checkpoint({ started: true, duel: 2 });
+  await first.result({ type: "duel", duel: 1, result: "loss" });
+  await first.close();
+  await appendFile(join(first.folder, "results.jsonl"), '{"type":"duel","duel":2,"re');
+  await seatState(first.folder, { pid: DEAD_PID });
+  const second = make();
+  assert.deepEqual(second.claim().results.map((line) => line.duel), [1]);
+  await second.result({ type: "duel", duel: 2, result: "win" });
+  const lines = (await readFile(join(second.folder, "results.jsonl"), "utf8")).split("\n").filter(Boolean);
+  assert.deepEqual(lines.map((line) => JSON.parse(line).duel), [1, 2]);
 });
 
 test("session capture stores each packet with its millisecond offset and full bytes", async (t) => {

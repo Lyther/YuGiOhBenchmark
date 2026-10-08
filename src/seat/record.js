@@ -178,20 +178,22 @@ class Recorder {
   }
 
   // Staged under a temporary name, then linked into place: a hard stop leaves
-  // the whole deck or none, and a recorded deck is never replaced.
+  // the whole file or none, and a written file is never replaced.
+  async #publish(name, data) {
+    const temp = join(this.folder, `.${name}.tmp`);
+    await writeFile(temp, data);
+    await link(temp, join(this.folder, name));
+    await rm(temp);
+  }
+
   deck(duel, ydkText) {
-    return this.#queue(async () => {
-      const temp = join(this.folder, `.duel-${duel}.ydk.tmp`);
-      await writeFile(temp, ydkText);
-      await link(temp, join(this.folder, `duel-${duel}.ydk`));
-      await rm(temp);
-    });
+    return this.#queue(() => this.#publish(`duel-${duel}.ydk`, ydkText));
   }
 
   replay(bytes) {
     this.#replays += 1;
     const index = this.#replays;
-    return this.#queue(() => writeFile(join(this.folder, `replay-${index}.yrp`), bytes, { flag: "wx" })).then(() => index);
+    return this.#queue(() => this.#publish(`replay-${index}.yrp`, bytes)).then(() => index);
   }
 
   result({ type, ...fields }) {

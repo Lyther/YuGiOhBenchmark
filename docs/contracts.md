@@ -96,7 +96,7 @@ Not stored anywhere: model reasoning, tool-call history (the runtime keeps it), 
 
 ## Persistent Data
 
-`record.js` is the only writer. All files are append-only or write-once, except `seat.json`, which is replaced atomically. The seat reads its folder back only to resume an interrupted match (Rejoin).
+`record.js` is the only writer. All files are append-only or write-once, except `seat.json`, which is replaced atomically. Write-once files are written under a temporary name and linked into place, so a hard stop leaves the whole file or none. The seat reads its folder back only to resume an interrupted match (Rejoin).
 
 - **Folder:** `<YGO_RUN_DIR>/<roomId>/<name>/`.
   - `roomId` is the part of `YGO_ROOM` after `#`.
@@ -116,7 +116,7 @@ Not stored anywhere: model reasoning, tool-call history (the runtime keeps it), 
   - `{"type":"interrupted","room":"…","phase":"duel","duel":2,"turn":5,"reason":"stdin closed","at":"…"}`, written when the seat process stops during a started match. It is not a result: the server still holds the seat (Rejoin).
   - `reason` is the catalog's `!victory` text for `reasonCode`, or `"#<code>"` if unknown.
   - Consumers must ignore unknown fields; new fields are only ever added.
-- **`duel-<n>.ydk`.** The standard YDK text of the deck sent for duel *n*, written at each successful submit. It is written under a temporary name and linked into place, so a hard stop leaves the whole file or none.
+- **`duel-<n>.ydk`.** The standard YDK text of the deck sent for duel *n*, written at each successful submit.
 - **`replay-<k>.yrp`.** The `STOC_REPLAY` payload bytes exactly as received, numbered in arrival order from 1 (a failed write can leave a gap; a resumed seat numbers on from the highest). The server sends one per duel; the seat keeps whatever arrives and requires no count. These files are not re-encoded.
 - **`session.bin`.** Written only when `YGO_CAPTURE=1`. Each received packet is stored as a record: `u32le` milliseconds since connect, `u16le` length, then the full packet bytes including the 2-byte length and 1-byte STOC id. It is the fixture format for `test/fixtures/sessions/`.
 - **Write failures.** An error event plus a log line; play continues.

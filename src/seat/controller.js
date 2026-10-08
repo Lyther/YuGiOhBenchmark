@@ -619,13 +619,15 @@ class Seat {
   // Lobby --------------------------------------------------------------------
 
   #onError(message) {
+    // 2339 checks the version before it looks for a held seat, so a restarted
+    // seat's rejoin gets the same single retry as a first join.
+    if (message.msg === ErrorMessageType.VERERROR) {
+      this.#onVersion(message.code).catch((error) => this.#disconnect(`reconnect failed: ${error.message}`));
+      return;
+    }
     if (this.#rejoin && this.#started) {
       const detail = message.msg === ErrorMessageType.DECKERROR ? "the deck differs from the one this match started with" : `${ErrorMessageType[message.msg] ?? message.msg} ${message.code}`;
       this.#refuseRejoin(detail);
-      return;
-    }
-    if (message.msg === ErrorMessageType.VERERROR) {
-      this.#onVersion(message.code).catch((error) => this.#disconnect(`reconnect failed: ${error.message}`));
       return;
     }
     if (message.msg === ErrorMessageType.DECKERROR) {

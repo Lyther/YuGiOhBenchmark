@@ -686,6 +686,26 @@ test("a restarted seat resumes the interrupted match in its folder with the deck
   assert.ok(seat.snapshot().events.every((event) => !/Could not write/.test(event.text)), "no file was written twice");
 });
 
+test("a restarted seat whose version the server refuses retries once with the offered one and resumes", async (t) => {
+  const first = await setup(t);
+  await joinRoom(first.seat, first.link);
+  await startDuel(first.seat, first.link);
+  await first.seat.close("stdin closed");
+  const { seat, link } = await restart(t, first.folder);
+  const resumed = seat.answer({ submit: true });
+  await tick();
+  assert.equal(link.take()[1].version, 0x1362);
+  // 2339 answers a wrong version before it looks for the held seat (room vr2bbfadf8).
+  link.deliver(stocPacket(YGOProStocErrorMsg, { msg: ErrorMessageType.VERERROR, code: 0x1363 }));
+  await tick();
+  assert.equal(link.connects.length, 2);
+  assert.equal(link.take()[1].version, 0x1363);
+  rejoinMidDuel(link, { lp: 8000, deck: 35 });
+  link.deliver(idle(0));
+  assert.equal(await resumed, "prompt");
+  assert.deepEqual([seat.snapshot().phase, seat.snapshot().match.duel], ["duel", 1]);
+});
+
 test("a restarted seat whose duel ended while it was away records that duel and the match as unknown", async (t) => {
   const first = await setup(t);
   await joinRoom(first.seat, first.link);

@@ -63,8 +63,11 @@ function cardRef(card, zone, catalog) {
   if (card.type) ref.types = catalog.typeWords(card.type);
   if (card.attribute) ref.attribute = catalog.attributeName(card.attribute);
   if (card.race) ref.race = catalog.raceName(card.race);
-  if (card.attack !== undefined) ref.atk = card.attack;
-  if (card.defense !== undefined) ref.def = card.defense;
+  // The server reports 0/0 stats and 0/0 scales for cards that have none.
+  const monster = card.type === undefined || (card.type & C.TYPE_MONSTER) !== 0;
+  const pendulum = card.type === undefined ? Boolean(card.scales?.left || card.scales?.right) : (card.type & C.TYPE_PENDULUM) !== 0;
+  if (monster && card.attack !== undefined) ref.atk = card.attack;
+  if (monster && card.defense !== undefined) ref.def = card.defense;
   for (const key of ["level", "rank", "link"]) {
     if (card[key]) ref[key] = card[key];
   }
@@ -74,7 +77,7 @@ function cardRef(card, zone, catalog) {
   if (card.overlays?.length) ref.materials = card.overlays.map((code) => cardName(code, catalog));
   if (card.equippedTo) ref.equippedTo = zoneLabel(card.equippedTo);
   if (card.targets?.length) ref.targets = card.targets.map(zoneLabel);
-  if (card.scales) ref.scales = { ...card.scales };
+  if (card.scales && pendulum) ref.scales = { ...card.scales };
   if (card.negated) ref.negated = true;
   return ref;
 }

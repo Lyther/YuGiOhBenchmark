@@ -136,6 +136,20 @@ test("the model sees a card's current Attribute, Type and card types, not only i
   assert.match(renderSeat(seatView(state({ board: changed }), { catalog }).dto), /\[Blue-Eyes White Dragon faceup-attack, Dark \[Zombie\/Effect\]\]/);
 });
 
+test("a card shows only the stats its kind has, though the server reports zeros for the rest", () => {
+  // As in the live capture rejoin-a-2.bin: every hand card's query carries ATK, DEF and scales.
+  const query = (type) => ({ flags: C.QUERY_TYPE | C.QUERY_ATTACK | C.QUERY_DEFENSE | C.QUERY_LSCALE | C.QUERY_RSCALE, type, attack: 0, defense: 0, lscale: 0, rscale: 0 });
+  const board = applyBoard(duelBoard(), gameMessage(YGOProMsgUpdateCard, {
+    controller: 1, location: C.LOCATION_MZONE, sequence: 1, card: query(C.TYPE_MONSTER | C.TYPE_EFFECT),
+  }));
+  const spell = applyBoard(board, gameMessage(YGOProMsgUpdateCard, {
+    controller: 0, location: C.LOCATION_SZONE, sequence: 2, card: query(C.TYPE_SPELL),
+  }));
+  const { dto } = seatView(state({ board: spell }), { catalog });
+  assert.deepEqual([dto.board.you.monsters[1].atk, dto.board.you.monsters[1].def, dto.board.you.monsters[1].scales], [0, 0, undefined]);
+  assert.deepEqual([dto.board.opponent.spells[2].atk, dto.board.opponent.spells[2].def, dto.board.opponent.spells[2].scales], [undefined, undefined, undefined]);
+});
+
 test("prompt views keep the numbers the server judges by and say how to answer", () => {
   const board = duelBoard();
   const tribute = buildPrompt(gameMessage(YGOProMsgSelectTribute, {

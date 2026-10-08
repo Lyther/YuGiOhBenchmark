@@ -59,9 +59,13 @@ function boardLines(board) {
 }
 
 // Chat is another player's text: quoted, its line breaks cannot start lines
-// that look like the seat's own.
+// that look like the seat's own. JSON.stringify leaves these breaks as they are.
+const UNICODE_BREAKS = /[\u0085\u2028\u2029]/g;
+
 function eventText(event) {
-  return event.kind === "chat" ? `${event.from} says: ${JSON.stringify(event.text)}` : event.text;
+  if (event.kind !== "chat") return event.text;
+  const quoted = JSON.stringify(event.text).replace(UNICODE_BREAKS, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  return `${event.from} says: ${quoted}`;
 }
 
 // Runs of identical automatic answers (empty chain windows) fold into one line.

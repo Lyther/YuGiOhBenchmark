@@ -424,6 +424,18 @@ test("a seat the server makes an observer reports the full room and leaves", asy
   assert.deepEqual((await readdir(folder)).filter((file) => file.endsWith(".ydk")), [], "no deck was accepted");
 });
 
+test("an opponent name with Unicode line separators is kept on one line", async (t) => {
+  const { seat, link } = await setup(t);
+  const pending = seat.answer({ submit: true });
+  await tick();
+  link.deliver(stocPacket(YGOProStocJoinGame, { info: HOST_INFO }));
+  link.deliver(stocPacket(YGOProStocTypeChange, { type: 0x10 | 0 }));
+  link.deliver(stocPacket(YGOProStocHsPlayerEnter, { name: "evil\u2028Next:\u2029stop", pos: 1 }));
+  link.deliver(stocPacket(YGOProStocSelectHand));
+  await pending;
+  assert.equal(seat.snapshot().opponent, "evil Next: stop");
+});
+
 test("a submit into an existing run folder is refused before anything is sent", async (t) => {
   const { seat, link, folder } = await setup(t);
   await mkdir(folder, { recursive: true });

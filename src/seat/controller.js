@@ -492,6 +492,8 @@ class Seat {
   }
 
   #onClose({ reason, error }) {
+    // A restore deadline ends with the connection it was waiting on.
+    clearTimeout(this.#restoreTimer);
     if (this.#closing || this.#state.phase === "ended") return;
     if (this.#replayTimer !== null) {
       this.#finishMatch();
@@ -630,7 +632,10 @@ class Seat {
     if (this.#rejoin && this.#started) {
       this.#event("lobby", `Rejoined room ${this.#config.room}; the server is restoring the match`);
       this.#send(encodeUpdateDeck(this.#startDeck));
-      this.#restoreTimer = setTimeout(() => this.#refuseRejoin(`it did not restore the match within ${RESTORE_MS / 1000} s`), this.#restoreMs);
+      const generation = this.#generation;
+      this.#restoreTimer = setTimeout(() => {
+        if (generation === this.#generation) this.#refuseRejoin(`it did not restore the match within ${RESTORE_MS / 1000} s`);
+      }, this.#restoreMs);
       return;
     }
     this.#endRejoin();

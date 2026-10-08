@@ -584,6 +584,27 @@ test("a rejoin the server refuses (seated as an observer, or a different deck) i
   }
 });
 
+test("a rejoin dropped before its restore leaves no deadline to abort the next one", async (t) => {
+  // The next attempt connects before the dropped one's 30 ms deadline, or after it.
+  for (const rejoinBaseMs of [1, 40]) {
+    const { seat, link } = await setup(t, { restoreMs: 30, rejoinBaseMs });
+    await joinRoom(seat, link);
+    await startDuel(seat, link);
+    link.serverClose();
+    await delay(100);
+    link.deliver(stocPacket(YGOProStocJoinGame, { info: HOST_INFO }));
+    link.serverClose();
+    await delay(100);
+    assert.equal(link.connects.length, 3, `rejoin base ${rejoinBaseMs} ms`);
+    rejoinMidDuel(link, { lp: 8000, deck: 35 });
+    link.deliver(idle(0));
+    assert.equal(await seat.wait(), "prompt");
+    await delay(60);
+    assert.equal(seat.snapshot().phase, "duel");
+    assert.equal(link.open, true);
+  }
+});
+
 test("a restarted seat resumes the interrupted match in its folder with the deck the match started with", async (t) => {
   const first = await setup(t);
   await joinRoom(first.seat, first.link);

@@ -182,12 +182,12 @@ function cardTools(catalog) {
 function roomTools(seat) {
   return [
     ["chat", {
-      description: "Send one chat line to the room (1-255 characters). Lines starting with / are server commands. Replies arrive as chat events.",
+      description: "Send one chat line to the room. 2339 drops a line over 100 characters (an emoji counts as two) and answers with a server warning. Lines starting with / are server commands. Replies arrive as chat events.",
       inputSchema: z.object({ text: z.string().min(1).max(255) }),
     }, async ({ text: line }) => {
       const { sent } = seat.chat(line);
       const pending = seat.snapshot().events.length - seat.snapshot().delivered.event;
-      return text(`Sent: ${sent}\nUndelivered events: ${pending}; call wait to read them.`);
+      return text(`Sent to the server: ${sent}\nUndelivered events: ${pending}; call wait to read them.`);
     }],
     ["surrender", {
       description: "Surrender the current duel. Then waits like wait and returns the next view.",

@@ -213,9 +213,9 @@ Rules shared by all tools:
 
 ### `chat`
 
-- **Input:** `{text: string}`, 1–255 characters.
+- **Input:** `{text: string}`, 1–255 characters, the protocol's limit. 2339 drops a line over 100 UTF-16 units (srvpro's spam check) and answers the sender with a server warning, which arrives as a chat event; 100 ASCII characters reached the opponent and 101 did not (2026-10-08).
 - **Behavior:** sends `CTOS_CHAT` as given. A line starting with `/` is a srvpro command and is not shown to the opponent. Calling it before the seat connects is an error.
-- **Result:** the line as sent and the number of undelivered events. Chat events, including replies, arrive through `wait`, so each is delivered exactly once.
+- **Result:** the line as sent to the server (not proof that the opponent got it) and the number of undelivered events. Chat events, including replies, arrive through `wait`, so each is delivered exactly once.
 
 ### `surrender`
 

@@ -406,7 +406,7 @@ The full schemas, DTOs and examples are in [contracts.md](contracts.md). The rul
     - `[mcp_servers.ygo]` with `command`, `args`, `env` (the child inherits only a small whitelist of variables), `required = true`, `default_tools_approval_mode = "approve"` and `tool_timeout_sec = 300`;
     - top-level `tool_output_token_limit = 100000`, so seat results are not truncated.
 
-    Then run `codex exec "$(cat <repo>/prompts/play-match.md)"`. Exec mode cannot prompt, so `approve` is what lets the seat's calls run in this recipe.
+    Then run `codex exec --skip-git-repo-check "$(cat <repo>/prompts/play-match.md)"`. The agent's folder is not a Git repository, and without the flag exec mode exits before starting. Exec mode cannot prompt, so `approve` is what lets the seat's calls run in this recipe.
   - Gemini CLI (optional, not yet run): `mcpServers.ygo` with `"trust": true` and `"timeout": 300000`, plus `tools.truncateToolOutputThreshold` raised to `1000000`; then `gemini -p`.
   - Watch live: join the room as an observer in KoishiPro.
 - **Wait budget.** `YGO_WAIT_MS` defaults to 240,000, under the 300 s timeout the Codex recipe sets. Raise it together with the runtime's tool timeout to poll less while an opponent thinks. Keep it under Claude Code's 30-minute stdio idle window.

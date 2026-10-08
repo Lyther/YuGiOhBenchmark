@@ -52,7 +52,7 @@ Codex CLI:
 
 ```bash
 cd /path/to/match01/codex
-codex exec \
+codex exec --skip-git-repo-check \
   -c 'mcp_servers.ygo.command="node"' \
   -c 'mcp_servers.ygo.args=["/path/to/repo/src/bin/seat.js"]' \
   -c 'mcp_servers.ygo.env={YGO_ROOM="M,TM0,NF#match01",YGO_NAME="codex-seat",YGO_CARDS_DIR="/path/to/repo/data/cards",YGO_RUN_DIR="/path/to/match01/codex",YGO_CAPTURE="1"}' \
@@ -63,7 +63,7 @@ codex exec \
   "$(cat /path/to/repo/prompts/play-match.md)"
 ```
 
-`codex exec` cannot ask for approval, so the seat's tools are pre-approved. The timeout is set explicitly above the seat's 240 s wait budget (`YGO_WAIT_MS`), and the output limit is raised so seat results are not truncated. Set `YGO_DECK` to a `.ydk` path to start an agent with a given deck; otherwise it builds one with the deck tools.
+`codex exec` refuses to start outside a Git repository unless `--skip-git-repo-check` is given, and it cannot ask for approval, so the seat's tools are pre-approved. The timeout is set explicitly above the seat's 240 s wait budget (`YGO_WAIT_MS`), and the output limit is raised so seat results are not truncated. Set `YGO_DECK` to a `.ydk` path to start an agent with a given deck; otherwise it builds one with the deck tools.
 
 Watch live by joining the room as an observer in KoishiPro. Each seat writes `<YGO_RUN_DIR>/<room id>/<name>/`: `results.jsonl`, `duel-<n>.ydk`, the server's `replay-<k>.yrp` files, and `session.bin` when capture is on. The server also announces a cloud replay id (`R#…`) for each duel in chat.
 

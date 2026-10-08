@@ -21,7 +21,7 @@ Implementation status: the seat is implemented (roadmap P1.1–P1.10 and P2.1) w
 
 The server stays the only rules authority. The seat mirrors what the server reports, turns each server question into a numbered prompt, and turns the model's numbers back into response bytes with `ygopro-msg-encode`. There is no orchestrator, database, queue, HTTP service or helper process. Two seats meet only in the server room. The run folder holds the server's replays plus one result line per duel.
 
-Excluded: rule checks, validators, redaction, tool limits, output caps, version pinning, reconnect, narration, rankings.
+Excluded: rule checks, validators, redaction, tool limits, output caps, version pinning, narration, rankings. A lost connection, a packet the seat cannot handle and a restarted seat all resume the match through srvpro's reconnect (AD-14).
 
 Implementation is complete when two real agents, each in its own runtime, build their own decks and finish a Bo3 on 2339 with siding and chat, and the server's replays are saved (Q-01 to Q-05). A model-free smoke run checks the plumbing first. It is a diagnostic, not a qualification stage.
 
@@ -46,7 +46,7 @@ IDs come from the concept. `D-` items are derived from research done for this do
 
 - `G-04` Goal: each match leaves the server's replays plus one result line per duel.
   Evidence: concept G-04, E-07; srvpro sends match replays right after `DUEL_END` ([source](https://github.com/mycard/srvpro/blob/c16bbccddbd5f3304e6e1d93118db45e8868003f/ygopro-server.coffee#L3111-L3126)).
-  Architecture impact: `seat/record.js` writes raw `STOC_REPLAY` payload bytes as `.yrp`, `results.jsonl` and the submitted `.ydk`. The controller reports the match over only once the replays are in (Runtime View, End), so the run folder is complete before the model can end its session.
+  Architecture impact: `seat/record.js` writes raw `STOC_REPLAY` payload bytes as `.yrp`, `results.jsonl` and the submitted `.ydk`. The controller reports the match over only once the replays are in (Runtime View, End), so the replays the server sent are saved before the model can end its session.
   Verification gate: Q-01 checks the files exist; the operator opens one replay in KoishiPro.
 
 - `C-01` Constraint: the server, room `M,TM0,NF#<id>`, the server version and the card data are all live; nothing is pinned.
@@ -210,14 +210,14 @@ The shape is a layered single process with a pure core. All game understanding (
 - **Between duels.** `STOC_CHANGE_SIDE` starts a `side` prompt. The submit sends `UPDATE_DECK`, and `SIDEERROR` returns to the side prompt. `STOC_SELECT_TP` goes to the loser of the previous duel.
 - **End.** `STOC_DUEL_END` ends the match, whether after two wins or earlier on a match kill (concept E-06); the seat counts no duels itself.
   - srvpro sends the replays it held right after `DUEL_END` ([source](https://github.com/mycard/srvpro/blob/c16bbccddbd5f3304e6e1d93118db45e8868003f/ygopro-server.coffee#L3111-L3126)), and each one is written as it arrives.
-  - The phase becomes `ended` once the seat holds one replay per duel played, the server closes the connection, or 15 s pass, whichever comes first. The seat then leaves the room.
-  - So the run folder is complete before any tool reports the match over, and an agent that stops at "match over" cannot cut off its replays. The wait is normally milliseconds.
-- **Shutdown.** The process lives until the runtime closes stdin. It then sends `LEAVE_GAME` if still connected, flushes the log and exits 0.
-- **Failures.** A socket error or unexpected close puts the seat in phase `disconnected` with a reason. Every tool reports it. There is no auto-reconnect (see Later).
+  - The phase becomes `ended` once the seat holds one replay per duel played, the server closes the connection, or 15 s pass, whichever comes first.
+  - So every replay the server sent is saved before any tool reports the match over, and an agent that stops at "match over" cannot cut them off. The wait is normally milliseconds. If the 15 s pass first, the folder lacks the replays that had not arrived: it holds fewer replay files than duel lines.
+- **Shutdown.** The process lives until the runtime closes stdin or receives `SIGTERM`/`SIGINT`. It then closes the connection, flushes the log and exits 0. During a started match it does not send `LEAVE_GAME`, which would forfeit: it writes an `interrupted` line, and srvpro holds the seat for a restarted seat to resume (AD-14). Otherwise it sends `LEAVE_GAME` first.
+- **Failures.** A socket error, an unexpected close, or a server packet the seat cannot handle starts a rejoin (`waiting: rejoin`; contracts Rejoin). Only a refused or exhausted rejoin puts the seat in phase `disconnected` with a reason, which every tool reports.
 - **Other commands.**
   - `npm run cards` refreshes card data and exits.
   - `npm run probe` joins a room, prints the lobby JSON and leaves.
-  - `npm run smoke` spawns two seats with no model. They join, chat one line each, surrender every duel, keep their decks at side, and the command checks that each run folder holds a match line and one replay per duel played.
+  - `npm run smoke` spawns two seats with no model. They join, chat one line each, surrender every duel, keep their decks at side, and the command checks that each run folder holds a match line and one replay per duel played. With `--restart`, one seat's process is killed at its first duel prompt and a new one must resume the match.
 
 ### Component View
 
@@ -235,7 +235,7 @@ The shape is a layered single process with a pure core. All game understanding (
   - removing internal fields (contracts.md Mapping).
 
   It is the only place an internal entity becomes a boundary shape.
-- **Recorder** (`seat/record.js`). It owns `runs/<room-id>/<player-name>/`, path sanitizing (the part of the room after `#`, filesystem-safe), append-only `results.jsonl`, `duel-<n>.ydk` at each submit, `replay-<k>.yrp` as raw bytes, and `session.bin` when `YGO_CAPTURE=1`. A write failure is logged and reported as an event; the match continues.
+- **Recorder** (`seat/record.js`). It owns `runs/<room-id>/<player-name>/`, path sanitizing (the part of the room after `#`, filesystem-safe), append-only `results.jsonl`, `duel-<n>.ydk` at each submit, `replay-<k>.yrp` as raw bytes, the `seat.json` resume checkpoint, and `session.bin` when `YGO_CAPTURE=1`. It reads the folder back only to resume an interrupted match, and refuses a folder another live seat owns or whose match is over. A write failure is logged and reported as an event; the match continues.
 - **Board mirror** (`game/board.js`). It is a pure reducer, `applyBoard(board, msg, {catalog}) → board`. It builds both sides from this player's view:
   - every zone with card queries (code, position, ATK/DEF, level/rank/link, counters, overlays, equip/target, status);
   - LP, turn, phase, turn player and the chain stack.
@@ -284,7 +284,7 @@ YuGiOhBenchmark/
   src/
     bin/
       seat.js                   - IMPLEMENTED: seat entry; config → catalog → deck → controller → MCP stdio; stops on stdin end or SIGTERM after leaving the room and flushing the run folder; never writes to stdout itself.
-      smoke.js                  - IMPLEMENTED: model-free plumbing check; two seats as MCP clients; deck, RPS, first player, one chat line each, surrender each duel, deck kept at side; exit 0 when both ended, heard each other and hold complete run folders.
+      smoke.js                  - IMPLEMENTED: model-free plumbing check; two seats as MCP clients; deck, RPS, first player, one chat line each, surrender each duel, deck kept at side; --restart kills one seat process at its first duel prompt and resumes with a new one; exit 0 when both ended, heard each other and hold complete run folders.
       cards.js                  - IMPLEMENTED: `npm run cards`; runs cards/sources.js refresh, prints what changed and the catalog counts.
       probe.js                  - VERIFIED_EXISTING: `npm run probe`; join a room, print lobby JSON, leave; owns describeMessage.
     config.js                   - VERIFIED_EXISTING: parse and validate YGO_* into a frozen object; owns defaults and limits; reads env only; config.test.js.
@@ -295,9 +295,9 @@ YuGiOhBenchmark/
     net/
       connection.js             - VERIFIED_EXISTING: TCP lifecycle, connect timeout, framing, parse, ordered send, close reasons; connection.test.js.
     seat/
-      controller.js             - IMPLEMENTED: the seat state machine and seat API (snapshot, wait, answer, chat, surrender, setDeck, markDelivered, close); owns phases, pending prompt, waiter, keepalive, auto-answers, host start, version retry, error translation, results and the replay wait at match end; no rendering, MCP or fs; controller.test.js, sessions.test.js.
+      controller.js             - IMPLEMENTED: the seat state machine and seat API (snapshot, wait, answer, chat, surrender, setDeck, markDelivered, close); owns phases, pending prompt, waiter, keepalive, auto-answers, host start, version retry, error translation, results and the replay wait at match end, and the rejoin (lost connection, packet fault, restarted seat; AD-14); no rendering, MCP or fs; controller.test.js, sessions.test.js.
       view.js                   - IMPLEMENTED: pure mapping to the SeatView and DeckView DTOs (contracts.md Mapping); owns delivery cursors, board elision and the `next` sentence; never drops an event; view.test.js.
-      record.js                 - IMPLEMENTED: run-folder writer for raw .yrp, results.jsonl, submitted .ydk, optional session.bin; one ordered write queue and flush(); record.test.js.
+      record.js                 - IMPLEMENTED: run-folder writer for raw .yrp, results.jsonl, submitted .ydk, seat.json, optional session.bin; one ordered write queue and flush(); claim() takes a new folder or one a stopped seat left mid-match and refuses the rest; record.test.js.
     game/
       board.js                  - IMPLEMENTED: pure board reducer for this player's view; per-duel me/opponent mapping (D-04); versions rise across duels; board.test.js.
       events.js                 - IMPLEMENTED: pure message → event sentence; effect text from desc; events.test.js.
@@ -411,7 +411,7 @@ The full schemas, DTOs and examples are in [contracts.md](contracts.md). The rul
   - Watch live: join the room as an observer in KoishiPro.
 - **Wait budget.** `YGO_WAIT_MS` defaults to 240,000, under the 300 s timeout the Codex recipe sets. Raise it together with the runtime's tool timeout to poll less while an opponent thinks. Keep it under Claude Code's 30-minute stdio idle window.
 - **Logs.** pino JSON lines on stderr (`YGO_LOG_LEVEL`, default `info`); the runtime decides where stderr goes. Each tool call logs its name, duration and result size, so a result that a runtime cut can be compared with what the seat sent. `YGO_CAPTURE=1` additionally writes `session.bin` for test fixtures.
-- **Health.** Healthy means `wait` answers. A seat stuck in `disconnected` needs a new match; reconnect is not built.
+- **Health.** Healthy means `wait` answers. A seat rejoins by itself after a lost connection; one in `disconnected` (rejoin refused or out of attempts) needs a new match. If an agent or its seat stops mid-match, run the same command again with the same `YGO_ROOM`, `YGO_NAME` and `YGO_RUN_DIR` within srvpro's hold (298 s on 2339) to resume it.
 - **Cost.** The cost is model usage, read from provider billing per match. The seat adds nothing billable.
 - **Card data hygiene.** `data/cards/` holds roughly 17 MB of downloaded files whose sources carry no license. Keep them local; `.gitignore` already excludes them. Refresh before each session, because super-pre changes almost daily.
 - **Upgrades.**
@@ -515,6 +515,12 @@ The full schemas, DTOs and examples are in [contracts.md](contracts.md). The rul
   - Consequences: a long backlog makes one large result, and the runtime's configured limit decides how it is shown.
   - Rejected: a fixed 32,000-character cap that dropped the oldest undelivered events, which loses events; batching with a "more events waiting" note, which is not needed while every limit can be raised (roadmap Later).
 
+- **AD-14 Resume first: rejoin through srvpro's reconnect.** Status: ACCEPTED (user, 2026-10-08; supersedes deferring reconnect).
+  - Context: a server packet the seat could not handle killed the process (readiness H-2). The concept promises that a restarted seat can rejoin. srvpro holds a dropped player's duel (90 s by default, 298 s on 2339) and restores the field and the pending prompt to the same player with the same deck, live-verified mid-duel and while siding.
+  - Decision: a lost connection, a packet fault and a restarted seat all rejoin (contracts Rejoin). A stop mid-match does not send `LEAVE_GAME`. `seat.json` lets a new process take the folder over. Only a refused or exhausted rejoin records `aborted`; a fault never records a result.
+  - Consequences: the opponent sees disconnect and reconnect chat lines; a seat that never returns makes the opponent wait out the hold; a duel that ends while away is not seen.
+  - Rejected: abort on a fault, which turns a recoverable client error into a lost match; log and continue without a reload, which can leave a stale board or no prompt; srvpro's `/refresh` chat command, which resends only the prompt, not the field.
+
 ## Risks, Debt, and Revisit Triggers
 
 - **Prompt coverage gaps.** Impact: an unseen message family stalls a duel. Mitigation: `unreadable` events, loud logs, per-type tests, captured sessions. Trigger: any `unreadable` event in a live run. Next proof: agent matches with decks that use Xyz, Link, Pendulum and counters; each gap found becomes a fix plus a test from its captured bytes.
@@ -522,11 +528,11 @@ The full schemas, DTOs and examples are in [contracts.md](contracts.md). The rul
 - **Library defects beyond D-02.** Impact: wrong response bytes or misparsed messages. The library is young (42 versions since February), and Neos reverted its adoption for reasons unknown. Mitigation: byte-layout tests for every prompt type against the stock client; P1.12 parses every captured live packet; fixes reported upstream. Trigger: `MSG_RETRY` after a well-formed answer, or any `unreadable` event.
 - **MCP SDK v2 churn.** Impact: a breaking change on upgrade. Mitigation: exact pin; `tools.test.js`. Trigger: a runtime handshake failure or a needed fix only in a newer major.
 - **Side Deck time limit.** srvpro on 2339 gives 3 minutes to side. Impact: a slow model could be kicked between duels. Mitigation: the server's announcement reaches the model as a server event, and the task prompt says so. Trigger: a kick after `CHANGE_SIDE` in an agent match.
-- **Unknown 2339 settings** (heartbeat, reconnect window). Impact: kicks. Mitigation: keepalives are confirmed on receipt. No `TIME_LIMIT` packet appeared in the smoke runs. Trigger: a kick or a disconnect during a long think.
+- **Unknown 2339 settings** (heartbeat). Impact: kicks. Mitigation: keepalives are confirmed on receipt. No `TIME_LIMIT` packet appeared in the smoke runs. Trigger: a kick or a disconnect during a long think. The reconnect hold is measured: 2339 kept a dropped seat for 298 s, then closed the other seat's socket without `MSG_WIN` (2026-10-08).
+- **Away from the match.** Impact: a duel that ends while a seat is away (the opponent surrendered) is not seen, since srvpro resends no `MSG_WIN`; a seat that never returns leaves the opponent waiting up to the hold, with no result. Mitigation: rejoins take seconds; the records say `interrupted` or `aborted` instead of inventing a result. Trigger: an `interrupted` or `aborted` line in an agent match.
 - **Token volume.** Impact: cost and context pressure over a long Bo3. Mitigation: empty-chain auto-pass and board elision; nothing is dropped to save tokens. Trigger: per-match cost from the first agent runs. Next proof: count prompts per duel and result sizes in P2.3.
 - **Runtime limits.** Impact: aborted or cut tool calls. Mitigation: each recipe sets the per-call timeout above `YGO_WAIT_MS` and raises the output limit; the seat logs every result's size. Trigger: a tool-timeout error or a truncation marker in an agent transcript.
 - **Intentional debt.**
-  - No reconnect: a crash forfeits the match.
   - No type checker.
   - No scripted player: in-duel gaps are found in real matches and turned into tests from captured bytes.
 
@@ -545,4 +551,4 @@ The full schemas, DTOs and examples are in [contracts.md](contracts.md). The rul
 - Register a tool only once it works. Never ship a placeholder tool or a "not available yet" path.
 - Every prompt type, event kind and CTOS builder ships with a test built from real `ygopro-msg-encode` messages or captured bytes. Mocks are not used.
 - New dependencies need an exact pin, the license, the maintenance date and a clean `npm audit` recorded in the PR.
-- Out of scope without a concept change: reconnect, narration, rankings, cross-game memory, multi-match orchestration, tag duels.
+- Out of scope without a concept change: narration, rankings, cross-game memory, multi-match orchestration, tag duels.

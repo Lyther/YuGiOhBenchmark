@@ -153,6 +153,11 @@ Exit gate:
   - Dependencies: P1.11.
   - Partly done: `test/seat/sessions.test.js` parses every packet of both smoke captures and replays them through the controller to the live results. The zone checks need an agent match's capture, because the smoke duels end at their first prompt.
 
+- [x] `P1.13` Resume first (architecture AD-14; supersedes the deferred reconnect).
+  - Files: `src/seat/controller.js`, `src/seat/record.js`, `src/game/board.js`, `src/bin/seat.js`, `src/bin/smoke.js`, their tests, `test/fixtures/sessions/rejoin-a-*.bin`.
+  - Scope: a lost connection, a packet the seat cannot handle and a restarted seat rejoin through srvpro's reconnect; a stop mid-match does not send `LEAVE_GAME`; `seat.json` lets a new process resume the folder (contracts Rejoin).
+  - Acceptance evidence: `npm test` (live rejoin bytes replayed through the controller; mutation checks); `npm run smoke -- --restart` passed in `sm2cde4817` on 2026-10-08 with a `SIGKILL`ed seat that resumed and finished the match.
+
 ## Phase 2: Model-Built Decks and Tuning
 
 Objective: the agents build and side their own decks, and the operator knows what a match costs.
@@ -198,7 +203,6 @@ Exit gate: a fresh clone follows README to a passing smoke run; stale status tex
 
 ## Later / Not Now
 
-- Reconnect after a seat crash. Trigger: a crash costs a real match. Deferred because it needs srvpro's reconnect flow and the same deck bytes, and nothing has crashed yet.
 - Narration, public rankings, RL training, cross-game memory. Deferred by the concept; reopen only with a concept change.
 - Bo1 rooms. Trigger: a Bo1 experiment. Only the room string changes (drop the `M`); the seat follows the server's match end and assumes no number of duels.
 - Batched results with a "more events waiting" note. Trigger: a runtime whose output limit cannot be raised. Every current runtime's limit is configurable (architecture D-01, AD-13).

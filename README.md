@@ -21,7 +21,7 @@ Optional first-edition effect pack: put `.ypk` files in `data/cards/first-editio
 
 ## Smoke run
 
-`npm run smoke [-- --room 'M,TM0,NF#<id>' --deck <ydk> --names a,b]` starts two real seats over MCP. They submit `decks/sample.ydk`, chat once each, play rock-paper-scissors and the first-player choice, surrender at their first prompt in every duel, and keep their decks at side. The run passes when both seats saw the match end, heard each other's chat line, and hold a complete run folder: one replay per duel, the deck of every duel, and a `match` result line. Add `YGO_CAPTURE=1` to record the raw server packets as `session.bin`.
+`npm run smoke [-- --room 'M,TM0,NF#<id>' --deck <ydk> --names a,b]` starts two real seats over MCP. They submit `decks/sample.ydk`, chat once each, play rock-paper-scissors and the first-player choice, surrender at their first prompt in every duel, and keep their decks at side. The run passes when both seats saw the match end, heard each other's chat line, and hold a complete run folder: one replay per duel, the deck of every duel, and a `match` result line. Add `YGO_CAPTURE=1` to record the raw server packets as `session.bin`. Add `--restart` to also check a resume: one seat's process is killed at its first duel prompt, and a new process must finish the match from the same run folder.
 
 ## Run an agent match
 
@@ -64,6 +64,8 @@ codex exec --skip-git-repo-check \
 ```
 
 `codex exec` refuses to start outside a Git repository unless `--skip-git-repo-check` is given, and it cannot ask for approval, so the seat's tools are pre-approved. The timeout is set explicitly above the seat's 240 s wait budget (`YGO_WAIT_MS`), and the output limit is raised so seat results are not truncated. Set `YGO_DECK` to a `.ydk` path to start an agent with a given deck; otherwise it builds one with the deck tools.
+
+If a connection drops, the seat rejoins the match by itself. If an agent or its seat stops mid-match, run the same command again in the same folder within about 5 minutes (how long 2339 holds a dropped seat): the new seat resumes the match from its run folder, with the deck the match started with.
 
 Watch live by joining the room as an observer in KoishiPro. Each seat writes `<YGO_RUN_DIR>/<room id>/<name>/`: `results.jsonl`, `duel-<n>.ydk`, the server's `replay-<k>.yrp` files, and `session.bin` when capture is on. The server also announces a cloud replay id (`R#…`) for each duel in chat.
 

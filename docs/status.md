@@ -6,11 +6,15 @@ Last checked: 2026-10-08. The accepted [concept](context/concept-zero.md), [arch
 
 The MCP seat is implemented: `src/bin/seat.js` serves eight tools over stdio (`wait`, `answer`, `deck_show`, `deck_edit`, `card`, `card_search`, `chat`, `surrender`) and plays as a normal YGOPro client. It covers card data, the deck model, the board mirror, readable events, prompt builders for all 20 response-bearing messages, the seat state machine, the run folder, and the text and JSON views. `npm run cards`, `npm run smoke` and `npm run probe` are the operator commands.
 
-`npm test` passes 126 offline tests on Node 22.23.2, 24.15.0 and 26.10.0. These include authored card fixtures, constructed codec messages, a connection double and captured sessions; their results are diagnostic, not live-duel proof. Separately, `spec/seat-entry.test.js` passes against the real seat. `spec/upstream-msg-encode.test.js` fails on purpose: it holds the four codec defects the seat works around ([report](upstream/ygopro-msg-encode.md), not filed).
+`npm test` passes 136 offline tests on Node 22.23.2, 24.15.0 and 26.10.0. These include authored card fixtures, constructed codec messages, a connection double and captured sessions; their results are diagnostic, not live-duel proof. Separately, `spec/seat-entry.test.js` passes against the real seat. `spec/upstream-msg-encode.test.js` fails on purpose: it holds the four codec defects the seat works around ([report](upstream/ygopro-msg-encode.md), not filed).
 
 The code review added eight regressions, first observed failing and then passing: empty card/sum selections, the shuffle wire layout and occupied slots, Extra Deck returns on a Deck/GY swap, the chat/match-end write race, model-visible scales/positions/targets, and the required English strings file. A ninth test checks that a sum prompt tells the model an empty choice is allowed. These fixes still need normal-duel coverage in P1.11–P1.12.
 
-The 2026-10-08 readiness review fixed five more problems, each with a regression test: agent recipes that shared one run folder, run folders reused or shared by colliding names, forfeits recorded from the wrong side, chat or names posing as seat output, and card downloads installed unchecked. One finding is still open; see Not yet proven.
+The 2026-10-08 readiness review fixed five more problems, each with a regression test: agent recipes that shared one run folder, run folders reused or shared by colliding names, forfeits recorded from the wrong side, chat or names posing as seat output, and card downloads installed unchecked.
+
+The follow-up review fixed three more, test first: setting a Spell/Trap asked for "0 zones" and refused a cancel; a match won by a match-winning effect was recorded as a draw; and the exec launch recipe lacked `--skip-git-repo-check`, so it could not start in its own folder.
+
+Resume first (architecture AD-14): a lost connection, a packet the seat cannot handle, and a restarted seat all rejoin the match through srvpro's reconnect instead of giving it up. A packet fault no longer ends the process; it is logged with its bytes and the duel is reloaded from the server. A seat stopped mid-match leaves it resumable, and a new process in the same run folder resumes it (contracts Rejoin). Mutation checks: each of 17 deliberate faults in this code made a test fail.
 
 ## Live evidence on 2339 (2026-10-07 and 2026-10-08)
 
@@ -22,12 +26,14 @@ The 2026-10-08 readiness review fixed five more problems, each with a regression
 - **Runtimes.** Claude Code 2.1.280 (`claude -p --mcp-config`) and Codex CLI 0.159.2 (`codex exec` with the README overrides) both connected to the seat. Each held one `answer` call through the full 240 s wait budget, got the lobby view back, and the seat left cleanly when the runtime ended.
 - **Fresh clone and Node versions (2026-10-08).** A fresh clone followed the README (`npm ci`, `npm run cards`, `npm test`, `npm run smoke`) to a passing smoke in `sm9df5820b`. The smoke also passed on Node 22 (`sm473aa0c3`), on Node 24 (`sm0081e31a`), and on Node 26 after the review fixes (`sm5c8debb4`). All 1,092 packets in the ten captures replay through the controller without an exception.
 - **Earlier probe runs** joined Bo3, zero-clock, no-banlist rooms at `0x1362`, including one version retry from `0x1351`.
+- **Reconnect (2026-10-08).** A two-client probe dropped one socket with a duel prompt pending and rejoined 3 s later with the same name, room and deck and no `READY`. srvpro restored the duel (an `MSG_START` with empty decks, `MSG_RELOAD_FIELD`, 12 `MSG_UPDATE_DATA`, then the same prompt). A drop while siding came back with `CHANGE_SIDE`, and the match finished with both replays. These packets are the `rejoin-a-*.bin` fixtures. In another room a seat that never returned was held for 298 s; srvpro then closed the other seat's socket without `MSG_WIN`.
+- **Restarted seat (2026-10-08).** `npm run smoke -- --restart` passed in `M,TM0,NF#sm2cde4817`. Seat b's process was killed with `SIGKILL` at its first duel prompt. A new process offered the resume, rejoined, got the same prompt back and finished the 0-2 match; both run folders hold two duel lines, two replays, both decks and the match line. The plain smoke passed afterwards in `sm16da4a44`.
 
 ## Not yet proven
 
 - A full Bo3 between two agents (roadmap P1.11, then P2.2 with decks the agents build). It needs launching both runtimes; the commands are in the [README](../README.md#run-an-agent-match).
 - Board fidelity over real duels: the captured smoke sessions end at each duel's first prompt, so P1.12's zone checks need an agent match's capture.
 - Cost per match (P2.3), Gemini CLI, and a 15-minute think (Q-02).
-- **Open: one exception in the packet path ends the seat process.** A malformed `MSG_START` from a local server reproduces it. No live packet has caused it. Guarding the handlers is proposed, not applied.
+- A rejoin caused by a live packet fault: only reproduced locally (a malformed `MSG_START` now leaves the seat running) and replayed from captured bytes.
 
 Downloaded card data stays local and out of Git.

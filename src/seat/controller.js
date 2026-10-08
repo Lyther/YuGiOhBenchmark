@@ -4,6 +4,7 @@ import {
   OcgcoreCommonConstants as C,
   PlayerChangeState,
   YGOProMsgHint,
+  YGOProMsgMatchKill,
   YGOProMsgRetry,
   YGOProMsgStart,
   YGOProMsgWin,
@@ -99,6 +100,7 @@ class Seat {
     [YGOProMsgStart, (seat, msg) => seat.#onStart(msg)],
     [YGOProMsgHint, (seat, msg) => seat.#onHint(msg)],
     [YGOProMsgWin, (seat, msg) => seat.#onWin(msg)],
+    [YGOProMsgMatchKill, (seat, msg) => seat.#onMatchKill(msg)],
     [YGOProMsgRetry, (seat) => seat.#onRetry()],
   ]);
 
@@ -118,6 +120,8 @@ class Seat {
   #decksRecorded = new Set();
   #sideSubmitted = false;
   #forfeit = null;
+  #matchKill = false;
+  #decided = null;
   #finished = null;
   #state;
 
@@ -540,13 +544,13 @@ class Seat {
     this.#replayTimer = null;
     const { score } = this.#state.match;
     const byScore = score.me > score.opponent ? "win" : score.me < score.opponent ? "loss" : "draw";
-    const result = this.#forfeit ?? byScore;
+    const result = this.#forfeit ?? this.#decided ?? byScore;
     this.#state.phase = "ended";
     this.#state.waiting = null;
-    const how = this.#forfeit ? " by forfeit" : "";
+    const how = this.#forfeit ? " by forfeit" : this.#decided ? " by a match-winning effect" : "";
     this.#event("duel", `The match is over: ${result}${how}, ${score.me}-${score.opponent}${score.draws ? ` with ${score.draws} draws` : ""}`);
-    const forfeit = this.#forfeit ? { forfeit: true } : {};
-    this.#writeResult({ type: "match", result, score: { ...score }, opponent: this.#state.opponent, ...forfeit });
+    const decidedBy = this.#forfeit ? { forfeit: true } : this.#decided ? { matchKill: true } : {};
+    this.#writeResult({ type: "match", result, score: { ...score }, opponent: this.#state.opponent, ...decidedBy });
     // The run folder must be complete before any call reports the match over.
     this.#finished = this.#record.flush().catch((error) => this.#writeFailed("the run folder", error));
     this.#finished.then(() => this.#wake("ended"));
@@ -610,6 +614,10 @@ class Seat {
       this.#event("win", `The match ended before duel ${match.duel + 1} was played: you ${result === "win" ? "win" : "lose"} it (${reason})`);
       return;
     }
+    // A match-winning effect ends the match after this duel, won by its
+    // winner (single_duel.cpp DuelEndProc; srvpro scores it 99).
+    if (this.#matchKill && result !== "draw") this.#decided = result;
+    this.#matchKill = false;
     if (result === "win") match.score.me += 1;
     else if (result === "loss") match.score.opponent += 1;
     else match.score.draws += 1;
@@ -619,6 +627,12 @@ class Seat {
     if (event) this.#event(event.kind, event.text);
     this.#state.prompt = null;
     this.#writeResult({ type: "duel", ...line });
+  }
+
+  #onMatchKill(msg) {
+    this.#matchKill = true;
+    const event = this.#state.board && describeEvent(msg, { board: this.#state.board, catalog: this.#catalog });
+    if (event) this.#event(event.kind, event.text);
   }
 
   #onRetry() {

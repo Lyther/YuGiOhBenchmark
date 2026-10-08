@@ -23,6 +23,7 @@ import {
   YGOProCtosUpdateDeck,
   YGOProMsgDraw,
   YGOProMsgHint,
+  YGOProMsgMatchKill,
   YGOProMsgNewTurn,
   YGOProMsgRetry,
   YGOProMsgSelectChain,
@@ -340,6 +341,33 @@ test("an opponent who disconnects mid-duel forfeits the match even when it led",
   assert.deepEqual(lines.map((line) => [line.type, line.result]), [["duel", "loss"], ["duel", "win"], ["match", "win"]]);
   assert.equal(lines[1].reason, "Lost connection");
   assert.equal(lines[2].forfeit, true);
+});
+
+test("a match-winning card effect gives the match to that duel's winner, whatever the score", async (t) => {
+  const { seat, link, folder } = await setup(t);
+  await joinRoom(seat, link);
+  await playDuel(seat, link, { winner: 1 });
+  link.deliver(stocPacket(YGOProStocChangeSide));
+  await seat.wait();
+  const side = seat.answer({ submit: true });
+  await tick();
+  link.deliver(stocPacket(YGOProStocDuelStart));
+  await startDuel(seat, link, 0);
+  // single_duel.cpp: MSG_MATCH_KILL sets match_kill, so DuelEndProc ends the
+  // match at 1-1; srvpro gives that duel's winner the match.
+  link.deliver(gamePacket(YGOProMsgMatchKill, { code: BLUE_EYES }));
+  link.deliver(gamePacket(YGOProMsgWin, { player: 0, type: 1 }));
+  link.deliver(stocPacket(YGOProStocDuelEnd));
+  link.deliver(Buffer.from([4, 0, 23, 1]));
+  link.deliver(Buffer.from([4, 0, 23, 2]));
+  assert.equal(await side, "ended");
+  await seat.close();
+  const lines = await results(folder);
+  assert.deepEqual(lines.map((line) => [line.type, line.result]), [["duel", "loss"], ["duel", "win"], ["match", "win"]]);
+  assert.deepEqual(lines[2].score, { me: 1, opponent: 1, draws: 0 });
+  assert.equal(lines[2].matchKill, true);
+  assert.equal(lines[2].forfeit, undefined);
+  assert.match(lastEvent(seat).text, /win by a match-winning effect, 1-1/);
 });
 
 test("an opponent name with control characters is kept on one line", async (t) => {

@@ -123,6 +123,19 @@ test("the model sees current Pendulum scales, targets, and face-up Extra Deck ca
   assert.match(text, /Extra:.*Odd-Eyes Pendulum Dragon faceup/);
 });
 
+test("the model sees a card's current Attribute, Type and card types, not only its printed ones", () => {
+  const report = (board, { type, attribute, race }) => applyBoard(board, gameMessage(YGOProMsgUpdateCard, {
+    controller: 1, location: C.LOCATION_MZONE, sequence: 1, card: { flags: C.QUERY_TYPE | C.QUERY_ATTRIBUTE | C.QUERY_RACE, type, attribute, race },
+  }));
+  const printed = report(duelBoard(), { type: C.TYPE_MONSTER | C.TYPE_NORMAL, attribute: C.ATTRIBUTE_LIGHT, race: C.RACE_DRAGON });
+  // An effect turned the same Blue-Eyes into a DARK Zombie Effect Monster.
+  const changed = report(printed, { type: C.TYPE_MONSTER | C.TYPE_EFFECT, attribute: C.ATTRIBUTE_DARK, race: C.RACE_ZOMBIE });
+  const blueEyes = (board) => seatView(state({ board }), { catalog }).dto.board.you.monsters[1];
+  assert.deepEqual([blueEyes(printed).attribute, blueEyes(printed).race, blueEyes(printed).types], ["Light", "Dragon", ["monster", "normal"]]);
+  assert.deepEqual([blueEyes(changed).attribute, blueEyes(changed).race, blueEyes(changed).types], ["Dark", "Zombie", ["monster", "effect"]]);
+  assert.match(renderSeat(seatView(state({ board: changed }), { catalog }).dto), /\[Blue-Eyes White Dragon faceup-attack, Dark \[Zombie\/Effect\]\]/);
+});
+
 test("prompt views keep the numbers the server judges by and say how to answer", () => {
   const board = duelBoard();
   const tribute = buildPrompt(gameMessage(YGOProMsgSelectTribute, {

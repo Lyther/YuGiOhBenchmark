@@ -59,6 +59,10 @@ function cardRef(card, zone, catalog) {
   if (card.code) ref.code = card.code;
   if (zone === "monster" || zone === "spell") ref.position = positionLabel(card.position, zone);
   if (zone === "extra" || zone === "banished") ref.position = card.position & C.POS_FACEUP ? "faceup" : "facedown";
+  // The server's current values: effects can change them from the printed card.
+  if (card.type) ref.types = catalog.typeWords(card.type);
+  if (card.attribute) ref.attribute = catalog.attributeName(card.attribute);
+  if (card.race) ref.race = catalog.raceName(card.race);
   if (card.attack !== undefined) ref.atk = card.attack;
   if (card.defense !== undefined) ref.def = card.defense;
   for (const key of ["level", "rank", "link"]) {

@@ -13,6 +13,8 @@ function cardText(card) {
   if (card.atk !== undefined) text += card.def !== undefined ? ` ${stat(card.atk)}/${stat(card.def)}` : ` ${stat(card.atk)}`;
   if (card.position) text += ` ${card.position}`;
   const extras = [];
+  // A monster's current Attribute and types, as printed cards show them: FIRE [Zombie/Effect/Tuner].
+  if (card.attribute) extras.push(`${card.attribute} [${[card.race, ...(card.types ?? []).slice(1).map(capitalize)].filter(Boolean).join("/")}]`);
   if (card.level) extras.push(`Level ${card.level}`);
   if (card.rank) extras.push(`Rank ${card.rank}`);
   if (card.link) extras.push(`Link ${card.link}`);

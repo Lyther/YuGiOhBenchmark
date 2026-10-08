@@ -302,6 +302,11 @@ class Catalog {
   raceName(bits) {
     return bitNames(bits, RACE_STRING, this.strings) ?? null;
   }
+
+  // The kind and type words of a card's type bits, as the card tool shows them.
+  typeWords(bits) {
+    return [kindOf(bits), ...words(bits, TYPE_WORDS)];
+  }
 }
 
 function rangeTests(filters) {

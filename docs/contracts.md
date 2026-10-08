@@ -246,7 +246,7 @@ Rules shared by all tools:
   - `grave` and `banished`: `CardRefView[]`.
 - **CardRefView.**
   - `name` (or `"face-down card"`), `code` (absent when unknown), `position`.
-  - Optional: `atk`, `def`, `level` / `rank` / `link`, `counters`, `materials` (names), `equippedTo`, `targets` (zone labels), `scales: {left, right}`, `negated`. Scales are the server's current values; Extra Deck and banished cards keep their face-up/face-down position.
+  - Optional: `types` (kind first, then type words), `attribute`, `race`, `atk`, `def`, `level` / `rank` / `link`, `counters`, `materials` (names), `equippedTo`, `targets` (zone labels), `scales: {left, right}`, `negated`. These are the server's current values, which effects can change from the printed card; Extra Deck and banished cards keep their face-up/face-down position. The text form shows a monster's as its card does: `Dark [Zombie/Effect]`.
 - **PromptView.**
   - `seq`, `kind`, `text`, `options: {n, label, tributes?, values?, counters?}[]`.
   - Optional, kind-dependent: `min`, `max`, `sumTarget`, `sumMode` (`exactly` | `at least`), `mustInclude` (`{label, values}[]`), `total`, `cancelable`, `finishable`, `rejected`.

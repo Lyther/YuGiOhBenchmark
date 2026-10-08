@@ -190,8 +190,9 @@ function mergeQuery(board, previous, query) {
   const card = previous ? { ...previous } : unknownCard();
   if (query.code !== undefined) card.code = cardCode(query.code);
   if (query.position !== undefined) card.position = query.position;
-  for (const [from, to] of [["attack", "attack"], ["defense", "defense"], ["level", "level"], ["rank", "rank"], ["link", "link"]]) {
-    if (query[from] !== undefined) card[to] = query[from];
+  // Current values, which effects can change from the printed card.
+  for (const key of ["type", "attribute", "race", "attack", "defense", "level", "rank", "link"]) {
+    if (query[key] !== undefined) card[key] = query[key];
   }
   if (query.lscale !== undefined || query.rscale !== undefined) {
     card.scales = { left: query.lscale ?? card.scales?.left ?? 0, right: query.rscale ?? card.scales?.right ?? 0 };

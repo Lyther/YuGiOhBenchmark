@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { setTimeout as delay, setImmediate as tick } from "node:timers/promises";
 
@@ -66,15 +67,19 @@ const OBSERVER = 7;
 
 async function setup(t, overrides = {}) {
   const runDir = await mkdtemp(join(tmpdir(), "ygo-seat-"));
-  t.after(() => rm(runDir, { recursive: true, force: true }));
   const link = createLink();
   const record = createRecorder({ runDir, room: ROOM, name: NAME });
   const config = { host: "koishi.example", port: 2339, name: NAME, room: ROOM, version: 0x1362, waitMs: 2000, ...overrides.config };
   const seat = createSeat({
     config, catalog, deck: DECK, record, connect: link.connect, log,
     replayGraceMs: overrides.replayGraceMs ?? 40, rejoinBaseMs: overrides.rejoinBaseMs ?? 1, random: () => 0.5,
+    restoreMs: overrides.restoreMs ?? 15_000,
   });
-  t.after(() => seat.close());
+  // Closing flushes the run folder's queued writes before it is removed.
+  t.after(async () => {
+    await seat.close();
+    await rm(runDir, { recursive: true, force: true });
+  });
   return { seat, link, folder: record.folder };
 }
 
@@ -266,7 +271,7 @@ test("siding, side errors, and the match ends only after one replay per duel", a
   assert.match(atEnd, /"type":"match"/, "the run folder is complete when ended is reported");
   assert.deepEqual((await readdir(folder)).filter((file) => file.endsWith(".yrp")).sort(), ["replay-1.yrp", "replay-2.yrp"]);
   await seat.close();
-  assert.deepEqual((await readdir(folder)).sort(), ["duel-1.ydk", "duel-2.ydk", "replay-1.yrp", "replay-2.yrp", "results.jsonl"]);
+  assert.deepEqual((await readdir(folder)).sort(), ["duel-1.ydk", "duel-2.ydk", "replay-1.yrp", "replay-2.yrp", "results.jsonl", "seat.json"]);
   assert.deepEqual([...await readFile(join(folder, "replay-2.yrp"))], [4, 5, 6], "unparseable replays are still saved raw");
   const lines = (await readFile(join(folder, "results.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
   assert.deepEqual(lines.map((line) => [line.type, line.result]), [["duel", "win"], ["duel", "win"], ["match", "win"]]);
@@ -528,14 +533,15 @@ test("a rejoin the server refuses (seated as an observer, or a different deck) i
   for (const [refusal, reason] of [
     [(link) => link.deliver(stocPacket(YGOProStocTypeChange, { type: OBSERVER })), /seated this seat as an observer/],
     [(link) => link.deliver(stocPacket(YGOProStocErrorMsg, { msg: ErrorMessageType.DECKERROR, code: 0 })), /deck differs/],
+    [() => delay(60), /did not restore the match within 15 s/],
   ]) {
-    const { seat, link, folder } = await setup(t);
+    const { seat, link, folder } = await setup(t, { restoreMs: 30 });
     await joinRoom(seat, link);
     await startDuel(seat, link);
     link.serverClose();
     await delay(20);
     link.deliver(stocPacket(YGOProStocJoinGame, { info: HOST_INFO }));
-    refusal(link);
+    await refusal(link);
     assert.equal(seat.snapshot().phase, "disconnected");
     assert.match(seat.snapshot().disconnect.reason, reason);
     assert.equal(link.open, false, "the refused connection is closed");
@@ -543,6 +549,62 @@ test("a rejoin the server refuses (seated as an observer, or a different deck) i
     assert.equal(link.connects.length, 2, "a refusal is final");
     assert.deepEqual((await results(folder)).map((line) => line.type), ["aborted"]);
   }
+});
+
+test("a restarted seat resumes the interrupted match in its folder with the deck the match started with", async (t) => {
+  const first = await setup(t);
+  await joinRoom(first.seat, first.link);
+  await playDuel(first.seat, first.link, { winner: 1 });
+  first.link.deliver(stocPacket(YGOProStocChangeSide));
+  await first.seat.wait();
+  // Sided: one Blue-Eyes swapped for the Side Deck card, so duel 2's deck differs.
+  first.seat.setDeck({ main: [14558127, 89631139, 46986414], extra: [84013237], side: [89631139] });
+  const side = first.seat.answer({ submit: true });
+  await tick();
+  first.link.deliver(stocPacket(YGOProStocDuelStart));
+  await startDuel(first.seat, first.link, 0);
+  for (const player of [0, 1, 0]) first.link.deliver(gamePacket(YGOProMsgNewTurn, { player }));
+  await first.seat.close("stdin closed");
+  assert.equal(await side, "disconnected");
+  // The stopped seat's process is gone: a real pid that has exited.
+  const state = JSON.parse(await readFile(join(first.folder, "seat.json"), "utf8"));
+  assert.deepEqual([state.started, state.duel, state.turn], [true, 2, 3]);
+  await writeFile(join(first.folder, "seat.json"), JSON.stringify({ ...state, pid: spawnSync(process.execPath, ["-e", ""]).pid }));
+
+  const link = createLink();
+  const record = createRecorder({ runDir: dirname(dirname(first.folder)), room: ROOM, name: NAME });
+  const seat = createSeat({
+    config: { host: "koishi.example", port: 2339, name: NAME, room: ROOM, version: 0x1362, waitMs: 2000 },
+    catalog, deck: { main: [BLUE_EYES], extra: [], side: [] }, record, connect: link.connect, log, rejoinBaseMs: 1, random: () => 0.5,
+  });
+  t.after(() => seat.close());
+  assert.match(seat.snapshot().prompt.text, /interrupted match \(1 duels finished\)/);
+  const pending = seat.answer({ submit: true });
+  await tick();
+  assert.deepEqual(types(link.take()), [YGOProCtosPlayerInfo, YGOProCtosJoinGame]);
+  rejoinMidDuel(link, { lp: 6100, deck: 30 });
+  const sent = link.take();
+  assert.deepEqual(types(sent), [YGOProCtosUpdateDeck], "no READY");
+  assert.deepEqual([...sent[0].deck.main, ...sent[0].deck.extra], [...DECK.main, ...DECK.extra], "duel-1.ydk, not the new process's deck");
+  link.deliver(idle(0));
+  assert.equal(await pending, "prompt");
+  const { match, board, opponent } = seat.snapshot();
+  assert.deepEqual([match.duel, board.duel, board.turn, board.lp.me, opponent], [2, 2, 3, 6100, "gpt-seat"]);
+  assert.deepEqual(seat.snapshot().deck.side, [89631139], "the working deck is the one last submitted");
+  assert.deepEqual(match.score, { me: 0, opponent: 1, draws: 0 });
+  const surrendered = seat.surrender();
+  await tick();
+  link.deliver(gamePacket(YGOProMsgWin, { player: 1, type: 0 }));
+  link.deliver(stocPacket(YGOProStocDuelEnd));
+  link.deliver(Buffer.from([4, 0, 23, 1]));
+  link.deliver(Buffer.from([4, 0, 23, 2]));
+  assert.equal(await surrendered, "ended");
+  await seat.close();
+  const lines = await results(first.folder);
+  assert.deepEqual(lines.map((line) => [line.type, line.result ?? line.phase]), [["duel", "loss"], ["interrupted", "duel"], ["duel", "loss"], ["match", "loss"]]);
+  assert.deepEqual(lines[3].score, { me: 0, opponent: 2, draws: 0 });
+  assert.deepEqual((await readdir(first.folder)).sort(), ["duel-1.ydk", "duel-2.ydk", "replay-1.yrp", "replay-2.yrp", "results.jsonl", "seat.json"]);
+  assert.ok(seat.snapshot().events.every((event) => !/Could not write/.test(event.text)), "no file was written twice");
 });
 
 test("a seat stopped mid-match does not leave it: srvpro keeps the seat for a resume", async (t) => {

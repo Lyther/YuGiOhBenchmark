@@ -167,6 +167,6 @@ test("replaying a live rejoin: the seat comes back mid-duel and while siding, an
   }
   const lines = (await readFile(join(record.folder, "results.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
   assert.deepEqual(lines.map((line) => [line.type, line.result]), [["duel", "loss"], ["duel", "loss"], ["match", "loss"]]);
-  assert.deepEqual((await readdir(record.folder)).sort(), ["duel-1.ydk", "duel-2.ydk", "replay-1.yrp", "replay-2.yrp", "results.jsonl"]);
+  assert.deepEqual((await readdir(record.folder)).sort(), ["duel-1.ydk", "duel-2.ydk", "replay-1.yrp", "replay-2.yrp", "results.jsonl", "seat.json"]);
   await seat.close();
 });

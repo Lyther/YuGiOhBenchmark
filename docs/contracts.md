@@ -96,12 +96,16 @@ Not stored anywhere: model reasoning, tool-call history (the runtime keeps it), 
 
 ## Persistent Data
 
-`record.js` is the only writer. All files are append-only or write-once. Nothing in the seat reads them back.
+`record.js` is the only writer. All files are append-only or write-once, except `seat.json`, which is replaced atomically. The seat reads its folder back only to resume an interrupted match (Rejoin).
 
 - **Folder:** `<YGO_RUN_DIR>/<roomId>/<name>/`.
   - `roomId` is the part of `YGO_ROOM` after `#`.
   - Both `roomId` and `name` are reduced to `[A-Za-z0-9._-]`, with other characters replaced by `_`. A part that changed this way gets `-` and the first 8 hex digits of its SHA-256, so names that differ stay apart.
-  - The folder is claimed at the first deck submit. If it already exists (a rerun, or another seat with the same room and name), that submit fails with an error and nothing is sent to the server.
+  - The folder is claimed at the first deck submit, before anything is sent to the server:
+    - no folder: it is created;
+    - a folder whose `seat.json` names a seat process that has exited, with no `match` or `aborted` line: the new seat takes it over and resumes that match (a folder left before any duel started is reused afresh, its lobby deck file dropped);
+    - otherwise the submit fails with the reason and nothing is sent: the owning seat is still running (a colliding seat), the match is over (a rerun), or the folder holds no `seat.json`.
+- **`seat.json`.** The resume checkpoint, replaced atomically: `{"pid":4242,"started":true,"duel":2,"turn":5}`. It is written at the claim, at the first `DUEL_START` (`started`: srvpro now holds the seat on a drop), at each `MSG_START` and at each new turn, because a rejoin's field reload carries no turn count.
 - **`results.jsonl`.** UTF-8, one JSON object per line, append-only:
   - `{"type":"duel","room":"M,TM0,NF#abc123","duel":1,"result":"win","reason":"LP reached 0","reasonCode":1,"turns":7,"first":true,"at":"2026-10-07T12:00:00.000Z"}`
   - `{"type":"match","room":"M,TM0,NF#abc123","result":"win","score":{"me":2,"opponent":1,"draws":0},"opponent":"gpt-seat","at":"…"}`, written once when the server ends the match, whether that took one, two or three duels.
@@ -126,10 +130,11 @@ Resume first: a lost connection or a damaged seat state never gives a match up b
 - **After the first duel started**, the rejoin sends `PLAYER_INFO` and `JOIN_GAME` with the same name and room, then `UPDATE_DECK` with the deck last sent before the first duel (srvpro compares those bytes). It never sends `READY` (during siding that would mark the side deck submitted). srvpro then sends `DUEL_START` and, by stage: `SELECT_HAND`, `SELECT_TP`, `CHANGE_SIDE`, or mid-duel an `MSG_START` with empty decks, `MSG_NEW_TURN`, `MSG_NEW_PHASE`, `MSG_RELOAD_FIELD`, `MSG_UPDATE_DATA` per location, and the pending hint and prompt (verified on 2339, fixtures `rejoin-a-*.bin`).
   - That `MSG_START` continues the current duel: no duel is counted and the turn count is kept, because the server does not resend it.
   - The pending prompt is cleared at the drop and comes back as a new prompt `seq`.
-- **Attempts.** Backoff 1, 2, 4, 8, 16, 16 s, each with jitter in [0.5, 1.5): about 47 s, inside srvpro's default 90 s hold (2339 held a dropped seat for more than 5 minutes). At most 10 rejoins per match.
+- **Attempts.** Backoff 1, 2, 4, 8, 16, 16 s, each with jitter in [0.5, 1.5): about 47 s, inside srvpro's default 90 s hold (2339 held a dropped seat for 298 s on 2026-10-08). At most 10 rejoins per match.
 - **Refusals end the match record.** Seated as an observer (srvpro no longer holds the seat), or a deck error (the deck differs) → `disconnected` with that reason and an `aborted` line. So does running out of attempts. A fault alone never records a duel or match result.
+- **A restarted seat** (the agent or its process stopped) resumes from its run folder when started with the same `YGO_ROOM`, `YGO_NAME` and `YGO_RUN_DIR` within srvpro's hold (about 5 minutes on 2339). Its deck prompt says so. Its submit restores the duel results, score, recorded decks and replay count, then rejoins as above with `duel-1.ydk`, whatever deck the new process was given; the working deck becomes the last one recorded. The turn count comes from `seat.json`. If the server no longer restores the match within 15 s of the rejoin (for example it already forfeited the seat, or made a new room of that name), the rejoin is refused.
 - **Stopping.** A seat that stops during a started match (stdin closed, `SIGTERM`, `SIGINT`) does not send `LEAVE_GAME`, which would forfeit; it writes an `interrupted` line and closes the socket. srvpro forfeits the seat only if nobody rejoins within its hold. Before the first duel and after the match the seat leaves normally.
-- **Limits.** A duel that ends while the seat is away (the opponent surrendered) is not seen; srvpro resends no `MSG_WIN`. A match-winning effect announced while away is lost the same way.
+- **Limits.** A duel that ends while the seat is away (the opponent surrendered) is not seen; srvpro resends no `MSG_WIN`. A match-winning effect announced while away is lost the same way. When a dropped player never returns, 2339 closed the other player's socket after the hold with no `MSG_WIN`; that seat's rejoin then finds no match and records `aborted`, not a win.
 
 ## MCP Tools
 

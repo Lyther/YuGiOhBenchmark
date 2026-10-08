@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -13,6 +14,13 @@ async function runDir(t) {
 }
 
 const fixedNow = () => new Date("2026-10-07T12:00:00.000Z");
+// A real process that has exited: the seat that left the folder is gone.
+const DEAD_PID = spawnSync(process.execPath, ["-e", ""]).pid;
+
+async function seatState(folder, fields) {
+  const state = JSON.parse(await readFile(join(folder, "seat.json"), "utf8"));
+  await writeFile(join(folder, "seat.json"), JSON.stringify({ ...state, ...fields }));
+}
 
 test("the run folder is the sanitized room id and player name", () => {
   assert.equal(runFolder("/runs", "M,TM0,NF#abc123", "opus-seat"), join("/runs", "abc123", "opus-seat"));
@@ -22,14 +30,57 @@ test("the run folder is the sanitized room id and player name", () => {
   assert.equal(runFolder("/runs", "plainroom", "x"), join("/runs", "plainroom", "x"));
 });
 
-test("a run folder is claimed once, so a rerun or a colliding seat cannot mix into it", async (t) => {
+test("a run folder is claimed once, so a colliding seat, a finished match or a foreign folder is refused", async (t) => {
+  const dir = await runDir(t);
+  const make = () => createRecorder({ runDir: dir, room: "M,TM0,NF#abc123", name: "opus-seat" });
+  const first = make();
+  assert.equal(first.claim(), null, "a new folder");
+  await first.result({ type: "duel", duel: 1 });
+  assert.throws(() => make().claim(), /belongs to seat process \d+, which is still running.*another YGO_NAME/);
+  await first.result({ type: "match", result: "win" });
+  await seatState(first.folder, { pid: DEAD_PID });
+  assert.throws(() => make().claim(), /already holds a match that is over \(match\).*fresh room id/);
+  await mkdir(join(dir, "abc123", "other-seat"));
+  const foreign = createRecorder({ runDir: dir, room: "M,TM0,NF#abc123", name: "other-seat" });
+  assert.throws(() => foreign.claim(), /already exists and holds no seat state/);
+  assert.deepEqual((await readdir(join(dir, "abc123"))).sort(), ["opus-seat", "other-seat"]);
+});
+
+test("a folder a stopped seat left mid-match is taken over with its progress", async (t) => {
+  const dir = await runDir(t);
+  const make = () => createRecorder({ runDir: dir, room: "M,TM0,NF#abc123", name: "opus-seat", now: fixedNow });
+  const first = make();
+  first.claim();
+  await first.deck(1, "#main\n89631139\n#extra\n!side\n");
+  await first.checkpoint({ started: true, duel: 1, turn: 6 });
+  await first.result({ type: "duel", duel: 1, result: "loss", reason: "LP reached 0", reasonCode: 1, turns: 6, first: true });
+  await first.replay(Uint8Array.from([1]));
+  await first.deck(2, "#main\n46986414\n#extra\n!side\n");
+  await first.checkpoint({ duel: 2, turn: 3 });
+  await first.result({ type: "interrupted", phase: "duel", duel: 2, turn: 3, reason: "stdin closed" });
+  await first.close();
+  await seatState(first.folder, { pid: DEAD_PID });
+  const second = make();
+  const found = second.claim();
+  assert.deepEqual([found.started, found.duel, found.turn, found.replays], [true, 2, 3, 1]);
+  assert.deepEqual(found.results.map((line) => [line.duel, line.result]), [[1, "loss"]]);
+  assert.deepEqual([...found.decks.keys()].sort(), [1, 2]);
+  assert.match(found.decks.get(1), /89631139/);
+  assert.equal(JSON.parse(await readFile(join(second.folder, "seat.json"), "utf8")).pid, process.pid, "the new seat owns the folder");
+  assert.equal(await second.replay(Uint8Array.from([2])), 2, "replays keep their numbering");
+});
+
+test("a folder left before any duel started is reused afresh", async (t) => {
   const dir = await runDir(t);
   const first = createRecorder({ runDir: dir, room: "M,TM0,NF#abc123", name: "opus-seat" });
   first.claim();
-  await first.result({ type: "duel", duel: 1 });
-  const again = createRecorder({ runDir: dir, room: "M,TM0,NF#abc123", name: "opus-seat" });
-  assert.throws(() => again.claim(), /already exists.*fresh room id or another YGO_NAME/);
-  assert.deepEqual(await readdir(join(dir, "abc123")), ["opus-seat"]);
+  await first.deck(1, "#main\n89631139\n#extra\n!side\n");
+  await first.close();
+  await seatState(first.folder, { pid: DEAD_PID });
+  const found = createRecorder({ runDir: dir, room: "M,TM0,NF#abc123", name: "opus-seat" }).claim();
+  assert.equal(found.started, false);
+  assert.equal(found.decks.size, 0);
+  assert.deepEqual((await readdir(first.folder)).sort(), ["seat.json"], "the unplayed lobby deck is dropped");
 });
 
 test("results are appended as JSON lines and decks and replays are written once each", async (t) => {

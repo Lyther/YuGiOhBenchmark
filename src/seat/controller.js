@@ -26,7 +26,7 @@ import {
   YGOProStocTypeChange,
 } from "ygopro-msg-encode";
 
-import { exportDeck } from "../deck/deck.js";
+import { exportDeck, parseDeck } from "../deck/deck.js";
 import { applyBoard, createBoard } from "../game/board.js";
 import { describeEvent } from "../game/events.js";
 import { cardName } from "../game/labels.js";
@@ -43,7 +43,7 @@ export class SeatError extends Error {}
 const REPLAY_GRACE_MS = 15_000;
 // A lost connection is rejoined with backoff 1, 2, 4, 8, 16, 16 s, each with
 // jitter in [0.5, 1.5): about 47 s, inside srvpro's reconnect wait (90 s by
-// default; 2339 held a dropped seat for more than 5 minutes on 2026-10-08).
+// default; 2339 held a dropped seat for 298 s on 2026-10-08).
 const REJOIN_ATTEMPTS = 6;
 const REJOIN_BASE_MS = 1000;
 const REJOIN_CAP_MS = 16_000;
@@ -52,6 +52,9 @@ const MATCH_REJOINS = 10;
 // A packet the seat cannot handle reloads the duel through a rejoin, at most
 // this often per duel; a deterministic fault would otherwise repeat.
 const FAULT_REJOINS = 2;
+// srvpro answers a recognized rejoin within a second; silence means it no
+// longer holds the match (it may even have made a fresh room of that name).
+const RESTORE_MS = 15_000;
 const OBSERVER = 7;
 const LOST_CONNECTION = 0x4;
 const CONTROL_CHARS = /\p{Cc}/gu;
@@ -78,6 +81,21 @@ export function createSeat(dependencies) {
 
 function copyDeck(deck) {
   return { main: [...deck.main], extra: [...deck.extra], side: [...deck.side] };
+}
+
+function resumeNote(found) {
+  if (!found || found.refused || !found.started) return null;
+  return `This run folder holds an interrupted match (${found.results.length} duels finished). Submitting rejoins it with the deck it started with.`;
+}
+
+function scoreOf(results) {
+  const score = { me: 0, opponent: 0, draws: 0 };
+  for (const { result } of results) {
+    if (result === "win") score.me += 1;
+    else if (result === "loss") score.opponent += 1;
+    else score.draws += 1;
+  }
+  return score;
 }
 
 function autoText({ prompt, auto }) {
@@ -118,7 +136,7 @@ class Seat {
     [YGOProMsgRetry, (seat) => seat.#onRetry()],
   ]);
 
-  #config; #catalog; #record; #connect; #log; #graceMs; #random; #rejoinBaseMs;
+  #config; #catalog; #record; #connect; #log; #graceMs; #random; #rejoinBaseMs; #restoreMs;
   #connection = null;
   #generation = 0;
   #version;
@@ -131,6 +149,8 @@ class Seat {
   #startDeck = null;
   #rejoin = null;
   #rejoinTimer = null;
+  #restoreTimer = null;
+  #resumeNote = null;
   #rejoins = 0;
   #faults = 0;
   #reloadTurn = null;
@@ -151,6 +171,7 @@ class Seat {
 
   constructor({
     config, catalog, deck, record, connect, log, replayGraceMs = REPLAY_GRACE_MS, rejoinBaseMs = REJOIN_BASE_MS, random = Math.random,
+    restoreMs = RESTORE_MS,
   }) {
     this.#config = config;
     this.#catalog = catalog;
@@ -159,6 +180,7 @@ class Seat {
     this.#log = log;
     this.#graceMs = replayGraceMs;
     this.#rejoinBaseMs = rejoinBaseMs;
+    this.#restoreMs = restoreMs;
     this.#random = random;
     this.#state = {
       phase: "deck", room: config.room, name: config.name, host: false, opponent: null, opponentReady: false,
@@ -166,6 +188,7 @@ class Seat {
       deck: copyDeck(deck), submitted: null, delivered: { event: 0, boardVersion: -1 },
       match: { duel: 0, results: [], score: { me: 0, opponent: 0, draws: 0 } }, disconnect: null, waiting: null,
     };
+    this.#resumeNote = resumeNote(record.inspect());
     this.#setPrompt(lobbyPrompt("deck", { text: this.#deckText() }));
   }
 
@@ -250,6 +273,7 @@ class Seat {
     this.#closing = true;
     clearTimeout(this.#replayTimer);
     clearTimeout(this.#rejoinTimer);
+    clearTimeout(this.#restoreTimer);
     const { phase, match } = this.#state;
     const resumable = this.#started && phase !== "ended" && phase !== "disconnected";
     if (resumable) this.#writeResult({ type: "interrupted", phase, duel: match.duel, turn: this.#state.board?.turn ?? 0, reason: why });
@@ -308,6 +332,7 @@ class Seat {
   }
 
   #deckText() {
+    if (this.#resumeNote) return this.#resumeNote;
     const { main, extra, side } = this.#state.deck;
     return `Your deck: Main ${main.length}, Extra ${extra.length}, Side ${side.length} (the server checks it). Submit it to join the room.`;
   }
@@ -350,14 +375,43 @@ class Seat {
   async #join() {
     // Claim the run folder before contacting the server: a rerun or a seat
     // with a colliding name must not mix its files into another match's.
+    let found;
     try {
-      this.#record.claim();
+      found = this.#record.claim();
     } catch (error) {
       throw new SeatError(error.message);
     }
     this.#state.phase = "lobby";
+    if (found) this.#resume(found);
     this.#state.submitted = copyDeck(this.#state.deck);
     await this.#open(this.#config.version);
+  }
+
+  // A restarted seat continues the match its folder holds (contracts.md
+  // Rejoin): results, decks and replay count come back from the folder.
+  #resume({ started, duel, turn, results, decks, replays }) {
+    const { match } = this.#state;
+    match.results = results.map(({ duel: number, result, reason, reasonCode, turns, first }) => ({ duel: number, result, reason, reasonCode, turns, first }));
+    match.score = scoreOf(match.results);
+    match.duel = match.results.length;
+    this.#duelsPlayed = match.duel;
+    this.#replaysReceived = replays;
+    for (const number of decks.keys()) this.#decksRecorded.add(number);
+    if (decks.size) this.#state.deck = parseDeck(decks.get(Math.max(...decks.keys())));
+    this.#startDeck = decks.has(1) ? parseDeck(decks.get(1)) : copyDeck(this.#state.deck);
+    // The checkpointed turn belongs to the duel still in progress, if any.
+    if (duel === match.duel + 1) this.#reloadTurn = turn;
+    this.#started = started;
+    if (started) {
+      this.#rejoin = { reason: "the seat restarted", attempts: 0 };
+      this.#state.waiting = "rejoin";
+    }
+    this.#resumeNote = null;
+    this.#event("lobby", `Resuming the interrupted match in this folder: ${match.duel} duels finished, score ${match.score.me}-${match.score.opponent}`);
+  }
+
+  #checkpoint(fields) {
+    this.#record.checkpoint(fields).catch((error) => this.#writeFailed("seat.json", error));
   }
 
   async #open(version) {
@@ -492,6 +546,7 @@ class Seat {
     if (phase === "ended" || phase === "disconnected") return;
     this.#rejoin = null;
     clearTimeout(this.#rejoinTimer);
+    clearTimeout(this.#restoreTimer);
     this.#state.phase = "disconnected";
     this.#state.disconnect = { reason };
     this.#state.prompt = null;
@@ -565,6 +620,7 @@ class Seat {
     if (this.#rejoin && this.#started) {
       this.#event("lobby", `Rejoined room ${this.#config.room}; the server is restoring the match`);
       this.#send(encodeUpdateDeck(this.#startDeck));
+      this.#restoreTimer = setTimeout(() => this.#refuseRejoin(`it did not restore the match within ${RESTORE_MS / 1000} s`), this.#restoreMs);
       return;
     }
     this.#rejoin = null;
@@ -625,11 +681,13 @@ class Seat {
   // whoever has not submitted; that is no accepted deck.
   #onDuelStart() {
     if (this.#rejoin) {
+      clearTimeout(this.#restoreTimer);
       this.#rejoin = null;
       this.#state.waiting = null;
       this.#event("server", "Back in the match; the server resends the board and any pending prompt");
       return;
     }
+    if (!this.#started) this.#checkpoint({ started: true });
     this.#started = true;
     if (this.#state.phase === "side" && this.#sideSubmitted) this.#deckAccepted(this.#state.match.duel + 1);
   }
@@ -724,8 +782,10 @@ class Seat {
     const board = this.#state.board;
     if (!board) return;
     const event = describeEvent(msg, { board, catalog: this.#catalog });
+    const next = applyBoard(board, msg, { catalog: this.#catalog });
     if (event) this.#event(event.kind, event.text);
-    this.#state.board = applyBoard(board, msg, { catalog: this.#catalog });
+    this.#state.board = next;
+    if (next.turn !== board.turn && !this.#rejoin) this.#checkpoint({ turn: next.turn });
   }
 
   // A rejoin's field reload (srvpro RequestField) restarts the stream with an
@@ -748,6 +808,7 @@ class Seat {
       return;
     }
     this.#faults = 0;
+    this.#checkpoint({ duel, turn: 0 });
     this.#event("duel", `Duel ${duel} starts: ${board.me === 0 ? "you go first" : "you go second"}`);
   }
 

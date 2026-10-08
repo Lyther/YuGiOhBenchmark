@@ -361,7 +361,7 @@ Entity definitions, allowed values and invariant owners are in [contracts.md § 
   - `replay-<k>.yrp` (raw server bytes, one per duel the server played; no count is required);
   - optional `session.bin` (length-prefixed raw STOC packets with millisecond offsets; enabled by `YGO_CAPTURE=1`; used for test fixtures).
 
-  Both seats write their own folder. Nothing reads it back at runtime. Retention and backup are the operator's.
+  Both seats write their own folder, and the agent recipes give each seat its own `YGO_RUN_DIR`. Nothing reads it back at runtime. Retention and backup are the operator's.
 - **Card data.** `data/cards/` is read-only at runtime and replaced by `npm run cards`:
   - `en-US/{cards.cdb,strings.conf}`;
   - `zh-CN/{cards.cdb,strings.conf}`;
@@ -397,8 +397,8 @@ The full schemas, DTOs and examples are in [contracts.md](contracts.md). The rul
 
 - **Install.** `npm ci`, then `npm run cards` (with `NODE_USE_ENV_PROXY=1` behind an HTTP proxy). Run `npm run cards` again before each session, since super-pre data changes almost daily (concept E-11). First-edition packs go in `data/cards/first-edition/`.
 - **Smoke.** Run `npm run probe` with `YGO_ROOM='M,TM0,NF#<id>'` to check room flags. Run `npm run smoke -- --room 'M,TM0,NF#<id>'` to check lobby, chat, siding, match end and replays with no model. It exits non-zero and names the missing file or phase on failure.
-- **Two agents.** The commands below were each run on 2026-10-07 for one 240 s call; the exact flags are in the README. Pick a fresh room id. For each agent, write a stdio server entry named `ygo` with command `node`, args `[<repo>/src/bin/seat.js]` and env `YGO_ROOM`, `YGO_NAME` (distinct per seat), optionally `YGO_DECK`. Give both agents `prompts/play-match.md`. Each recipe sets the per-call timeout and the output limit explicitly instead of relying on defaults (D-01).
-  - Claude Code: `claude -p "$(cat prompts/play-match.md)" --mcp-config <file> --allowedTools "mcp__ygo__*" WebSearch WebFetch`.
+- **Two agents.** The commands below were each run on 2026-10-07 for one 240 s call; the exact flags are in the README. Pick a fresh room id. For each agent, write a stdio server entry named `ygo` with command `node`, args `[<repo>/src/bin/seat.js]` and env `YGO_ROOM`, `YGO_NAME` (distinct per seat), optionally `YGO_DECK`. Start each agent in its own empty folder outside the repo and set `YGO_RUN_DIR` to it. An agent can read its working folder, so a shared run folder would show it the other seat's decks and live capture. Give both agents `prompts/play-match.md`. Each recipe sets the per-call timeout and the output limit explicitly instead of relying on defaults (D-01).
+  - Claude Code: `claude -p "$(cat <repo>/prompts/play-match.md)" --mcp-config <file> --allowedTools "mcp__ygo__*" WebSearch WebFetch`.
     - The pre-approval only enables what headless mode cannot prompt for. The runtime's other tools and MCP servers stay as configured.
     - The default per-call timeout (about 28 h) is already above `YGO_WAIT_MS`, and `-p` never moves calls to the background.
     - Results stay inline because every seat tool declares `anthropic/maxResultSizeChars`.
@@ -406,7 +406,7 @@ The full schemas, DTOs and examples are in [contracts.md](contracts.md). The rul
     - `[mcp_servers.ygo]` with `command`, `args`, `env` (the child inherits only a small whitelist of variables), `required = true`, `default_tools_approval_mode = "approve"` and `tool_timeout_sec = 300`;
     - top-level `tool_output_token_limit = 100000`, so seat results are not truncated.
 
-    Then run `codex exec "$(cat prompts/play-match.md)"`. Exec mode cannot prompt, so `approve` is what lets the seat's calls run in this recipe.
+    Then run `codex exec "$(cat <repo>/prompts/play-match.md)"`. Exec mode cannot prompt, so `approve` is what lets the seat's calls run in this recipe.
   - Gemini CLI (optional, not yet run): `mcpServers.ygo` with `"trust": true` and `"timeout": 300000`, plus `tools.truncateToolOutputThreshold` raised to `1000000`; then `gemini -p`.
   - Watch live: join the room as an observer in KoishiPro.
 - **Wait budget.** `YGO_WAIT_MS` defaults to 240,000, under the 300 s timeout the Codex recipe sets. Raise it together with the runtime's tool timeout to poll less while an opponent thinks. Keep it under Claude Code's 30-minute stdio idle window.

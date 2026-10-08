@@ -27,16 +27,23 @@ Optional first-edition effect pack: put `.ypk` files in `data/cards/first-editio
 
 Pick a fresh room id. Each agent gets its own seat, the same room and a distinct name, and both receive [prompts/play-match.md](prompts/play-match.md).
 
-Claude Code (headless). Write an MCP config:
+Start each agent in its own empty folder outside the repo, and make that folder its seat's `YGO_RUN_DIR`. An agent can explore its working folder, so it must not find the other seat's decks or packet capture there.
+
+```bash
+mkdir -p /path/to/match01/claude /path/to/match01/codex
+```
+
+Claude Code (headless). Write `/path/to/match01/claude/claude-mcp.json`:
 
 ```json
 { "mcpServers": { "ygo": { "command": "node", "args": ["/path/to/repo/src/bin/seat.js"],
   "env": { "YGO_ROOM": "M,TM0,NF#match01", "YGO_NAME": "claude-seat", "YGO_CARDS_DIR": "/path/to/repo/data/cards",
-           "YGO_RUN_DIR": "/path/to/repo/runs", "YGO_CAPTURE": "1" } } } }
+           "YGO_RUN_DIR": "/path/to/match01/claude", "YGO_CAPTURE": "1" } } } }
 ```
 
 ```bash
-claude -p "$(cat prompts/play-match.md)" --mcp-config claude-mcp.json --allowedTools "mcp__ygo__*" WebSearch WebFetch
+cd /path/to/match01/claude
+claude -p "$(cat /path/to/repo/prompts/play-match.md)" --mcp-config claude-mcp.json --allowedTools "mcp__ygo__*" WebSearch WebFetch
 ```
 
 The pre-approval only lets headless mode run the seat and web tools without prompting; other tools and MCP servers stay as configured. In `-p` mode, long tool calls are not moved to the background.
@@ -44,20 +51,21 @@ The pre-approval only lets headless mode run the seat and web tools without prom
 Codex CLI:
 
 ```bash
+cd /path/to/match01/codex
 codex exec \
   -c 'mcp_servers.ygo.command="node"' \
   -c 'mcp_servers.ygo.args=["/path/to/repo/src/bin/seat.js"]' \
-  -c 'mcp_servers.ygo.env={YGO_ROOM="M,TM0,NF#match01",YGO_NAME="codex-seat",YGO_CARDS_DIR="/path/to/repo/data/cards",YGO_RUN_DIR="/path/to/repo/runs",YGO_CAPTURE="1"}' \
+  -c 'mcp_servers.ygo.env={YGO_ROOM="M,TM0,NF#match01",YGO_NAME="codex-seat",YGO_CARDS_DIR="/path/to/repo/data/cards",YGO_RUN_DIR="/path/to/match01/codex",YGO_CAPTURE="1"}' \
   -c 'mcp_servers.ygo.required=true' \
   -c 'mcp_servers.ygo.default_tools_approval_mode="approve"' \
   -c 'mcp_servers.ygo.tool_timeout_sec=300' \
   -c 'tool_output_token_limit=100000' \
-  "$(cat prompts/play-match.md)"
+  "$(cat /path/to/repo/prompts/play-match.md)"
 ```
 
 `codex exec` cannot ask for approval, so the seat's tools are pre-approved. The timeout is set explicitly above the seat's 240 s wait budget (`YGO_WAIT_MS`), and the output limit is raised so seat results are not truncated. Set `YGO_DECK` to a `.ydk` path to start an agent with a given deck; otherwise it builds one with the deck tools.
 
-Watch live by joining the room as an observer in KoishiPro. Each seat writes `runs/<room id>/<name>/`: `results.jsonl`, `duel-<n>.ydk`, the server's `replay-<k>.yrp` files, and `session.bin` when capture is on. The server also announces a cloud replay id (`R#…`) for each duel in chat.
+Watch live by joining the room as an observer in KoishiPro. Each seat writes `<YGO_RUN_DIR>/<room id>/<name>/`: `results.jsonl`, `duel-<n>.ydk`, the server's `replay-<k>.yrp` files, and `session.bin` when capture is on. The server also announces a cloud replay id (`R#…`) for each duel in chat.
 
 ## Configuration
 

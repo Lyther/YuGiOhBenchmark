@@ -293,7 +293,7 @@ Every automatic answer appends an `auto` event naming what was chosen. The seat 
   - Exits 0 when both seats reached `ended`, each heard the other's chat line, and both run folders hold a `match` line, one replay per duel played and the deck of each duel. Otherwise it exits 1 and prints what is missing.
 - `npm run cards`: refreshes `YGO_CARDS_DIR`. Exits 0 when every source was fetched or was already current, and 1 on any failure, in which case existing files are kept.
 - `npm run probe` (also `npm start`): one lobby join; prints JSON; leaves.
-- `npm test`: `node --test test`, offline.
+- `npm test`: `node --test "test/**/*.test.js"`, offline.
 
 ## Configuration
 

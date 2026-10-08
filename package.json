@@ -10,7 +10,7 @@
     "submodules": "git submodule update --init --recursive",
     "start": "node src/bin/probe.js",
     "probe": "node src/bin/probe.js",
-    "test": "node --test test",
+    "test": "node --test \"test/**/*.test.js\"",
     "cards": "node src/bin/cards.js",
     "seat": "node src/bin/seat.js",
     "smoke": "node src/bin/smoke.js"

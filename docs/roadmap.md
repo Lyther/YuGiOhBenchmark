@@ -46,7 +46,7 @@ Exit gate:
   - Files: `package.json`, `.gitignore`, `.env.example`, `src/config.js`, `src/log.js`, `test/config.test.js`.
   - Scope:
     - Add exact-pinned `@modelcontextprotocol/server` 2.3.1, `zod` 4.6.5, `pino` 10.4.0, `ygopro-deck-encode` 1.0.16 and `ygopro-cdb-encode` 1.1.1, plus `@modelcontextprotocol/client` 2.3.1 for the smoke command. This set was audited on 2026-10-07 with 0 vulnerabilities.
-    - Scripts `seat`, `smoke`, `cards`, `probe`, `test` (`node --test test`).
+    - Scripts `seat`, `smoke`, `cards`, `probe`, `test` (`node --test "test/**/*.test.js"`).
     - Ignore `runs/`.
     - `config.js` covers every variable in contracts.md, with limits.
   - Acceptance evidence: `npm test` passes; `npm audit --omit=dev` reports 0; `config.test.js` covers defaults, limits and bad values.

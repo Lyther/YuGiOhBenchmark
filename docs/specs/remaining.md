@@ -4,7 +4,7 @@ Status: GREEN (2026-10-07; RED evidence retained below)
 
 Scope: everything left after the core (roadmap P1.1–P1.3 transport and probe, see [core.md](core.md)). One executable test pins the MCP seat entry point that P1.9 must deliver. The rest of the roadmap is a behavior table that names the step and the proof that will cover each row. That table is not executable and is not a test suite.
 
-Test: [`spec/seat-entry.test.js`](../../spec/seat-entry.test.js), run with `node --test spec/seat-entry.test.js`. It stays outside `npm test` (`node --test test`) because it needs downloaded card data. The original RED baseline joined the live 2339 server; the implemented seat is tested before deck submission.
+Test: [`spec/seat-entry.test.js`](../../spec/seat-entry.test.js), run with `node --test spec/seat-entry.test.js`. It stays outside `npm test` (`node --test "test/**/*.test.js"`) because it needs downloaded card data. The original RED baseline joined the live 2339 server; the implemented seat is tested before deck submission.
 
 ## Entry-Point Contract
 

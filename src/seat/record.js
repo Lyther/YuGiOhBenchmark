@@ -155,7 +155,7 @@ class Recorder {
 
   #queue(write) {
     const run = this.#writeChain.then(() => this.#ensure()).then(write);
-    this.#writeChain = run.catch(() => {});
+    this.#writeChain = run.catch(() => { });
     return run;
   }
 

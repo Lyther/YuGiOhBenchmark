@@ -1,7 +1,7 @@
 import {
+  OcgcoreCommonConstants as C,
   DeckErrorType,
   ErrorMessageType,
-  OcgcoreCommonConstants as C,
   PlayerChangeState,
   YGOProMsgHint,
   YGOProMsgMatchKill,
@@ -38,7 +38,7 @@ import {
 } from "../protocol/packets.js";
 
 // A seat-state problem a tool reports as isError; nothing is sent.
-export class SeatError extends Error {}
+export class SeatError extends Error { }
 
 const REPLAY_GRACE_MS = 15_000;
 // A lost connection is rejoined with backoff 1, 2, 4, 8, 16, 16 s, each with

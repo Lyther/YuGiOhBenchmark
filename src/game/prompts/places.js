@@ -1,7 +1,7 @@
 import { YGOProMsgSelectDisField, YGOProMsgSelectPlace } from "ygopro-msg-encode";
 
-import { zoneLabel } from "../labels.js";
 import { ZONE_NAMES, who } from "../board.js";
+import { zoneLabel } from "../labels.js";
 import { answerField, chooseMany, hintText, numbered, response } from "./options.js";
 
 function placeLabel(context, { player, location, sequence }) {

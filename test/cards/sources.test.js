@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtemp, readdir, readFile, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -36,7 +36,7 @@ async function tempDir(t) {
   return dir;
 }
 
-const noWait = { sleep: async () => {}, random: () => 0 };
+const noWait = { sleep: async () => { }, random: () => 0 };
 // Downloads are checked for the SQLite header before install.
 const cdb = (text) => `SQLite format 3\u0000${text}`;
 

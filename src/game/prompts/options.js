@@ -5,7 +5,7 @@ import { effectText } from "../events.js";
 import { cardName, zoneLabel } from "../labels.js";
 
 // An answer that does not fit the pending prompt; nothing is sent.
-export class AnswerError extends Error {}
+export class AnswerError extends Error { }
 
 const ANSWER_FIELDS = ["choose", "counts", "card", "submit", "cancel", "finish"];
 

@@ -247,25 +247,31 @@ test("select-unselect, sorting and counters", () => {
   assert.deepEqual(bytes(unselect, { finish: true }), [255, 255, 255, 255]);
   assert.throws(() => resolveAnswer(unselect.prompt, { cancel: true }), AnswerError);
 
-  const sort = prompt(YGOProMsgSortCard, { player: 0, count: 3, cards: [
-    { code: BLUE_EYES, ...where(0, C.LOCATION_DECK, 0) }, { code: ASH, ...where(0, C.LOCATION_DECK, 1) }, { code: MAXX, ...where(0, C.LOCATION_DECK, 2) },
-  ] });
+  const sort = prompt(YGOProMsgSortCard, {
+    player: 0, count: 3, cards: [
+      { code: BLUE_EYES, ...where(0, C.LOCATION_DECK, 0) }, { code: ASH, ...where(0, C.LOCATION_DECK, 1) }, { code: MAXX, ...where(0, C.LOCATION_DECK, 2) },
+    ]
+  });
   assert.equal(sort.prompt.kind, "sort");
   assert.deepEqual(bytes(sort, { choose: [3, 1, 2] }), [1, 2, 0], "byte i is the new position of card i");
   assert.deepEqual(bytes(sort, { cancel: true }), [255]);
   assert.throws(() => resolveAnswer(sort.prompt, { choose: [1, 2] }), /every option/);
 
-  const counters = prompt(YGOProMsgSelectCounter, { player: 0, counterType: 1, counterCount: 3, count: 2, cards: [
-    { code: BLUE_EYES, ...where(0, MZONE, 2), counterCount: 2 }, { code: DECODE, ...where(0, MZONE, 0), counterCount: 4 },
-  ] });
+  const counters = prompt(YGOProMsgSelectCounter, {
+    player: 0, counterType: 1, counterCount: 3, count: 2, cards: [
+      { code: BLUE_EYES, ...where(0, MZONE, 2), counterCount: 2 }, { code: DECODE, ...where(0, MZONE, 0), counterCount: 4 },
+    ]
+  });
   assert.equal(counters.prompt.kind, "counter");
   assert.equal(counters.prompt.total, 3);
   assert.match(counters.prompt.text, /3 Spell Counter/);
   assert.deepEqual(counters.prompt.options.map((option) => option.counters), [2, 4]);
   assert.deepEqual(bytes(counters, { counts: [{ option: 1, count: 1 }, { option: 2, count: 2 }] }), [1, 0, 2, 0]);
-  const single = prompt(YGOProMsgSelectCounter, { player: 0, counterType: 1, counterCount: 2, count: 1, cards: [
-    { code: BLUE_EYES, ...where(0, MZONE, 2), counterCount: 5 },
-  ] });
+  const single = prompt(YGOProMsgSelectCounter, {
+    player: 0, counterType: 1, counterCount: 2, count: 1, cards: [
+      { code: BLUE_EYES, ...where(0, MZONE, 2), counterCount: 5 },
+    ]
+  });
   assert.deepEqual(single.auto, { counts: [{ option: 1, count: 2 }] });
 });
 

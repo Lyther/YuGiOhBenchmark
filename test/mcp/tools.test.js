@@ -36,7 +36,7 @@ async function startSeat(t) {
   await client.connect(transport, { timeout: 20_000 });
   unsubscribe("child_process", onSpawn);
   t.after(async () => {
-    await client.close().catch(() => {});
+    await client.close().catch(() => { });
     await rm(dir, { recursive: true, force: true });
   });
   const call = async (name, args = {}) => {

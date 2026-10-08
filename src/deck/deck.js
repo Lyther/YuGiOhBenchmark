@@ -53,7 +53,7 @@ export function sectionFor(code, catalog) {
 }
 
 // A deck edit that cannot apply; the whole call is rejected and nothing changes.
-export class DeckEditError extends Error {}
+export class DeckEditError extends Error { }
 
 const SECTIONS = ["main", "extra", "side"];
 const MAX_COPIES = 60;

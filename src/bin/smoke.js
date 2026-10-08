@@ -47,7 +47,7 @@ async function startSeat(label, { room, name, deck }) {
 async function restartSeat(label, seat) {
   say(`${label}: killing the seat process at its first duel prompt`);
   process.kill(seat.transport.pid, "SIGKILL");
-  await seat.client.close().catch(() => {});
+  await seat.client.close().catch(() => { });
   const next = await startSeat(label, seat.options);
   const offer = await call(next.client, "wait");
   if (!/interrupted match/.test(offer.prompt?.text ?? "")) throw new Error(`${label}: the restarted seat did not offer to resume`);
@@ -142,7 +142,7 @@ async function main() {
     process.exitCode = 1;
   } finally {
     clearTimeout(deadline);
-    await Promise.all(Object.values(seats).map(({ client }) => client.close().catch(() => {})));
+    await Promise.all(Object.values(seats).map(({ client }) => client.close().catch(() => { })));
   }
 }
 

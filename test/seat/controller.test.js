@@ -7,9 +7,9 @@ import test from "node:test";
 import { setTimeout as delay, setImmediate as tick } from "node:timers/promises";
 
 import {
+  OcgcoreCommonConstants as C,
   DeckErrorType,
   ErrorMessageType,
-  OcgcoreCommonConstants as C,
   PlayerChangeState,
   YGOProCtosChat,
   YGOProCtosHandResult,
@@ -50,7 +50,7 @@ import {
 
 import { AnswerError } from "../../src/game/prompts/index.js";
 import { createLogger } from "../../src/log.js";
-import { SeatError, createSeat } from "../../src/seat/controller.js";
+import { createSeat, SeatError } from "../../src/seat/controller.js";
 import { createRecorder } from "../../src/seat/record.js";
 import { fixtureCatalog } from "../helpers/fixture-catalog.js";
 import { createLink } from "../helpers/link.js";

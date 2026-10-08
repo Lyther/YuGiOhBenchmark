@@ -6,7 +6,7 @@ Last checked: 2026-10-08. The accepted [concept](context/concept-zero.md), [arch
 
 The MCP seat is implemented: `src/bin/seat.js` serves eight tools over stdio (`wait`, `answer`, `deck_show`, `deck_edit`, `card`, `card_search`, `chat`, `surrender`) and plays as a normal YGOPro client. It covers card data, the deck model, the board mirror, readable events, prompt builders for all 20 response-bearing messages, the seat state machine, the run folder, and the text and JSON views. `npm run cards`, `npm run smoke` and `npm run probe` are the operator commands.
 
-`npm test` passes 136 offline tests on Node 22.23.2, 24.15.0 and 26.10.0. These include authored card fixtures, constructed codec messages, a connection double and captured sessions; their results are diagnostic, not live-duel proof. Separately, `spec/seat-entry.test.js` passes against the real seat. `spec/upstream-msg-encode.test.js` fails on purpose: it holds the four codec defects the seat works around ([report](upstream/ygopro-msg-encode.md), not filed).
+`npm test` passes 143 offline tests on Node 22.23.2, 24.15.0 and 26.10.0. These include authored card fixtures, constructed codec messages, a connection double and captured sessions; their results are diagnostic, not live-duel proof. Separately, `spec/seat-entry.test.js` passes against the real seat. `spec/upstream-msg-encode.test.js` fails on purpose: it holds the four codec defects the seat works around ([report](upstream/ygopro-msg-encode.md), not filed).
 
 The code review added eight regressions, first observed failing and then passing: empty card/sum selections, the shuffle wire layout and occupied slots, Extra Deck returns on a Deck/GY swap, the chat/match-end write race, model-visible scales/positions/targets, and the required English strings file. A ninth test checks that a sum prompt tells the model an empty choice is allowed. These fixes still need normal-duel coverage in P1.11–P1.12.
 
@@ -15,6 +15,13 @@ The 2026-10-08 readiness review fixed five more problems, each with a regression
 The follow-up review fixed three more, test first: setting a Spell/Trap asked for "0 zones" and refused a cancel; a match won by a match-winning effect was recorded as a draw; and the exec launch recipe lacked `--skip-git-repo-check`, so it could not start in its own folder.
 
 Resume first (architecture AD-14): a lost connection, a packet the seat cannot handle, and a restarted seat all rejoin the match through srvpro's reconnect instead of giving it up. A packet fault no longer ends the process; it is logged with its bytes and the duel is reloaded from the server. A seat stopped mid-match leaves it resumable, and a new process in the same run folder resumes it (contracts Rejoin). Mutation checks: each of 17 deliberate faults in this code made a test fail.
+
+The third peer review fixed four recovery problems. Each fix has a regression test that fails on the old code:
+
+- A refused rejoin counted twice, so the budget ran out after three connects and a stray retry could connect after the seat gave up.
+- A dropped rejoin's restore deadline aborted the next, successful rejoin.
+- The reload's `MSG_NEW_TURN` reset the resume checkpoint to turn 1.
+- A duel that ended while a seat was away renumbered the rest of the match and turned a 2-1 win into a draw. Such a duel is now `unknown`, and so is the match unless the known duels decide it.
 
 ## Live evidence on 2339 (2026-10-07 and 2026-10-08)
 
@@ -28,6 +35,7 @@ Resume first (architecture AD-14): a lost connection, a packet the seat cannot h
 - **Earlier probe runs** joined Bo3, zero-clock, no-banlist rooms at `0x1362`, including one version retry from `0x1351`.
 - **Reconnect (2026-10-08).** A two-client probe dropped one socket with a duel prompt pending and rejoined 3 s later with the same name, room and deck and no `READY`. srvpro restored the duel (an `MSG_START` with empty decks, `MSG_RELOAD_FIELD`, 12 `MSG_UPDATE_DATA`, then the same prompt). A drop while siding came back with `CHANGE_SIDE`, and the match finished with both replays. These packets are the `rejoin-a-*.bin` fixtures. In another room a seat that never returned was held for 298 s; srvpro then closed the other seat's socket without `MSG_WIN`.
 - **Restarted seat (2026-10-08).** `npm run smoke -- --restart` passed in `M,TM0,NF#sm2cde4817`. Seat b's process was killed with `SIGKILL` at its first duel prompt. A new process offered the resume, rejoined, got the same prompt back and finished the 0-2 match; both run folders hold two duel lines, two replays, both decks and the match line. The plain smoke passed afterwards in `sm16da4a44`, and the restart smoke again on the final code in `smc74c2825`.
+- **A duel that ended while a seat was away (2026-10-08).** A two-process probe killed seat b during duel 1, seat a surrendered, and b resumed while siding; then each seat surrendered once. Before the fix (`awa5fe6836`), b numbered duels 2 and 3 as 1 and 2 and recorded a draw. After it (`aw043b381a`), b recorded duel 1 as `unknown`, numbered duels 2 and 3 as a did, and recorded the match as `unknown` at 1-1. Each folder holds three decks and three replays. After these fixes the restart smoke passed in `sm12cbc239` and `sm681dbd46`, and the plain smoke in `sm22dae75d`.
 
 ## Not yet proven
 

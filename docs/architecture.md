@@ -222,7 +222,7 @@ The shape is a layered single process with a pure core. All game understanding (
 ### Component View
 
 - **Wire** (`protocol/framing.js`, `protocol/packets.js`). It frames bytes into packets, builds every CTOS packet the seat sends, and parses STOC packets into `ygopro-msg-encode` objects, keeping the raw payload. It owns no state beyond the framer buffer. A failure surfaces as a thrown parse error, which the connection reports.
-- **Connection** (`net/connection.js`). It owns the socket: connect timeout, ordered writes, and close reasons (`server-closed`, `error`, `local`). Its interface is `openConnection({host, port, timeoutMs, onMessage, onClose, onError}) → Promise<{send, close, closed}>`; callbacks are installed before connecting. Parsed-message failures go to `onError` and later packets remain readable. It knows nothing about phases or prompts.
+- **Connection** (`net/connection.js`). It owns the socket: connect timeout, ordered writes, and close reasons (`server-closed`, `error`, `local`). Its interface is `openConnection({host, port, timeoutMs, onMessage, onClose, onError}) → Promise<{send, close, closed}>`; callbacks are installed before connecting. A connect that fails only rejects that promise; `onClose` reports, once, the end of a connection that opened. Parsed-message failures go to `onError` and later packets remain readable. It knows nothing about phases or prompts.
 - **Seat controller** (`seat/controller.js`). It is the only stateful module. It owns:
   - phase, connection handle, duel index, my duel player, board, pending prompt, event log, chat log;
   - working and submitted decks, match score;

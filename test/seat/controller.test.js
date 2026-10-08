@@ -15,6 +15,7 @@ import {
   YGOProCtosHsReady,
   YGOProCtosHsStart,
   YGOProCtosJoinGame,
+  YGOProCtosLeaveGame,
   YGOProCtosPlayerInfo,
   YGOProCtosResponse,
   YGOProCtosSurrender,
@@ -25,6 +26,7 @@ import {
   YGOProMsgHint,
   YGOProMsgMatchKill,
   YGOProMsgNewTurn,
+  YGOProMsgReloadField,
   YGOProMsgRetry,
   YGOProMsgSelectChain,
   YGOProMsgSelectIdleCmd,
@@ -60,6 +62,7 @@ const NAME = "opus-seat";
 const DECK = Object.freeze({ main: [89631139, 89631139, 46986414], extra: [84013237], side: [14558127] });
 const HOST_INFO = { lflist: 0, rule: 5, mode: 1, duel_rule: 5, no_check_deck: 0, no_shuffle_deck: 0, start_lp: 8000, start_hand: 5, draw_count: 1, time_limit: 0 };
 const BLUE_EYES = 89631139;
+const OBSERVER = 7;
 
 async function setup(t, overrides = {}) {
   const runDir = await mkdtemp(join(tmpdir(), "ygo-seat-"));
@@ -67,7 +70,10 @@ async function setup(t, overrides = {}) {
   const link = createLink();
   const record = createRecorder({ runDir, room: ROOM, name: NAME });
   const config = { host: "koishi.example", port: 2339, name: NAME, room: ROOM, version: 0x1362, waitMs: 2000, ...overrides.config };
-  const seat = createSeat({ config, catalog, deck: DECK, record, connect: link.connect, log, replayGraceMs: overrides.replayGraceMs ?? 40 });
+  const seat = createSeat({
+    config, catalog, deck: DECK, record, connect: link.connect, log,
+    replayGraceMs: overrides.replayGraceMs ?? 40, rejoinBaseMs: overrides.rejoinBaseMs ?? 1, random: () => 0.5,
+  });
   t.after(() => seat.close());
   return { seat, link, folder: record.folder };
 }
@@ -392,22 +398,28 @@ test("a submit into an existing run folder is refused before anything is sent", 
   assert.equal(seat.snapshot().prompt.kind, "deck", "the deck prompt stays open");
 });
 
-test("a disconnect mid-duel is a phase with a reason and an aborted line", async (t) => {
-  const { seat, link, folder } = await setup(t);
+test("a lost connection is rejoined with backoff; only when every attempt fails is the match aborted", async (t) => {
+  const { seat, link, folder } = await setup(t, { rejoinBaseMs: 1 });
   await joinRoom(seat, link);
   await startDuel(seat, link);
+  link.take();
   const waiting = seat.wait();
   link.serverClose();
-  assert.equal(await waiting, "disconnected");
-  assert.equal(seat.snapshot().phase, "disconnected");
-  assert.match(seat.snapshot().disconnect.reason, /server-closed/);
+  assert.equal(seat.snapshot().waiting, "rejoin");
   await assert.rejects(seat.answer({ choose: [1] }), SeatError);
-  assert.equal(await seat.wait(), "disconnected");
+  assert.throws(() => seat.chat("still there?"), /rejoining/);
+  // Each attempt reaches a socket that the server closes again at once.
+  for (let attempt = 1; attempt <= 6; attempt += 1) {
+    await delay(40);
+    assert.equal(link.connects.length, 1 + attempt, `attempt ${attempt} connects`);
+    assert.deepEqual(types(link.take()), [YGOProCtosPlayerInfo, YGOProCtosJoinGame]);
+    link.serverClose();
+  }
+  assert.equal(await waiting, "disconnected");
+  assert.match(seat.snapshot().disconnect.reason, /could not rejoin after 6 attempts \(first: server-closed/);
   await seat.close();
-  const [line] = (await readFile(join(folder, "results.jsonl"), "utf8")).trim().split("\n").map((text) => JSON.parse(text));
-  assert.equal(line.type, "aborted");
-  assert.equal(line.phase, "duel");
-  assert.equal(line.reason, "server-closed");
+  const lines = await results(folder);
+  assert.deepEqual(lines.map((line) => [line.type, line.phase]), [["aborted", "duel"]]);
 });
 
 test("a chat wake followed by match-end packets still waits for the run-folder writes", async (t) => {
@@ -446,7 +458,126 @@ test("chat goes out unchanged; opponent lines wake a wait; server lines are tagg
   assert.deepEqual(chats.map((event) => [event.from, event.text]), [["server", "[Server]: welcome"], ["opponent", "your move"]]);
 });
 
-test("unknown game messages become unreadable events; one blocking call at a time; surrender only in a duel", async (t) => {
+// srvpro's answer to a recognized rejoin mid-duel, as captured live in
+// fixtures/sessions/rejoin-a-2.bin: an empty-deck MSG_START and the field.
+function rejoinMidDuel(link, { lp, deck }) {
+  const slots = (count) => Array.from({ length: count }, () => ({ occupied: 0 }));
+  const player = (life, deckCount) => ({
+    lp: life, mzone: slots(7), szone: slots(8), deckCount, handCount: 5, graveCount: 0, removedCount: 0, extraCount: 1, extraPCount: 0,
+  });
+  link.deliver(stocPacket(YGOProStocJoinGame, { info: HOST_INFO }));
+  link.deliver(stocPacket(YGOProStocTypeChange, { type: 0x10 | 0 }));
+  link.deliver(stocPacket(YGOProStocHsPlayerEnter, { name: "gpt-seat", pos: 1 }));
+  link.deliver(stocPacket(YGOProStocDuelStart));
+  link.deliver(gamePacket(YGOProMsgStart, {
+    playerType: 0, duelRule: 5, startLp0: 8000, startLp1: 8000,
+    player0: { deckCount: 0, extraCount: 0 }, player1: { deckCount: 0, extraCount: 0 },
+  }));
+  link.deliver(gamePacket(YGOProMsgNewTurn, { player: 1 }));
+  link.deliver(gamePacket(YGOProMsgReloadField, { duelRule: 5, players: [player(lp, deck), player(8000, 34)], chains: [] }));
+}
+
+test("a packet the seat cannot handle reloads the duel through a rejoin and changes no score", async (t) => {
+  const { seat, link, folder } = await setup(t);
+  await joinRoom(seat, link);
+  await startDuel(seat, link);
+  link.deliver(gamePacket(YGOProMsgNewTurn, { player: 0 }));
+  link.deliver(gamePacket(YGOProMsgNewTurn, { player: 1 }));
+  link.take();
+  // A two-player room has no playerType 2: building the board throws (H-2).
+  link.deliver(gamePacket(YGOProMsgStart, {
+    playerType: 2, duelRule: 5, startLp0: 8000, startLp1: 8000,
+    player0: { deckCount: 35, extraCount: 1 }, player1: { deckCount: 35, extraCount: 1 },
+  }));
+  const [fault, rejoining] = seat.snapshot().events.slice(-2);
+  assert.equal(fault.kind, "unreadable");
+  assert.match(fault.text, /could not handle server packet 1/);
+  assert.match(rejoining.text, /rejoining the match/);
+  assert.equal(seat.snapshot().match.duel, 1, "the failed MSG_START counted no duel");
+  await delay(20);
+  assert.equal(link.connects.length, 2);
+  link.take();
+  rejoinMidDuel(link, { lp: 5200, deck: 33 });
+  const sent = link.take();
+  assert.deepEqual(types(sent), [YGOProCtosUpdateDeck], "the lobby deck again, and no READY");
+  assert.deepEqual([...sent[0].deck.main, ...sent[0].deck.extra], [...DECK.main, ...DECK.extra]);
+  const { board, match, waiting } = seat.snapshot();
+  assert.deepEqual([match.duel, board.duel, board.turn, waiting], [1, 1, 2, null], "same duel, the seat's own turn count");
+  assert.deepEqual(board.lp, { me: 5200, opponent: 8000 });
+  assert.equal(board.sides.me.deck, 33);
+  assert.equal(seat.snapshot().opponent, "gpt-seat");
+  link.deliver(idle(0));
+  assert.equal(await seat.wait(), "prompt");
+
+  // An unknown game message is a fault too. After two reloads in one duel the
+  // seat keeps playing on what it has instead of rejoining again.
+  link.deliver(Buffer.from([3, 0, 1, 0xfe, 7]));
+  assert.match(seat.snapshot().events.at(-2).text, /unknown game message 254/);
+  await delay(20);
+  assert.equal(link.connects.length, 3);
+  rejoinMidDuel(link, { lp: 5200, deck: 33 });
+  link.deliver(Buffer.from([3, 0, 1, 0xfe, 7]));
+  assert.match(lastEvent(seat).text, /stops reloading it/);
+  await delay(20);
+  assert.equal(link.connects.length, 3);
+  assert.deepEqual(seat.snapshot().match.score, { me: 0, opponent: 0, draws: 0 });
+  assert.equal(await readFile(join(folder, "results.jsonl"), "utf8").catch(() => ""), "", "a fault writes no result");
+});
+
+test("a rejoin the server refuses (seated as an observer, or a different deck) is aborted with the reason", async (t) => {
+  for (const [refusal, reason] of [
+    [(link) => link.deliver(stocPacket(YGOProStocTypeChange, { type: OBSERVER })), /seated this seat as an observer/],
+    [(link) => link.deliver(stocPacket(YGOProStocErrorMsg, { msg: ErrorMessageType.DECKERROR, code: 0 })), /deck differs/],
+  ]) {
+    const { seat, link, folder } = await setup(t);
+    await joinRoom(seat, link);
+    await startDuel(seat, link);
+    link.serverClose();
+    await delay(20);
+    link.deliver(stocPacket(YGOProStocJoinGame, { info: HOST_INFO }));
+    refusal(link);
+    assert.equal(seat.snapshot().phase, "disconnected");
+    assert.match(seat.snapshot().disconnect.reason, reason);
+    assert.equal(link.open, false, "the refused connection is closed");
+    await delay(20);
+    assert.equal(link.connects.length, 2, "a refusal is final");
+    assert.deepEqual((await results(folder)).map((line) => line.type), ["aborted"]);
+  }
+});
+
+test("a seat stopped mid-match does not leave it: srvpro keeps the seat for a resume", async (t) => {
+  const { seat, link, folder } = await setup(t);
+  await joinRoom(seat, link);
+  await startDuel(seat, link);
+  link.deliver(gamePacket(YGOProMsgNewTurn, { player: 0 }));
+  link.take();
+  await seat.close("stdin closed");
+  assert.deepEqual(link.take(), [], "LEAVE_GAME would forfeit a match the server still holds");
+  assert.equal(link.open, false);
+  const lines = await results(folder);
+  assert.deepEqual(lines.map(({ type, phase, duel, turn, reason }) => [type, phase, duel, turn, reason]), [["interrupted", "duel", 1, 1, "stdin closed"]]);
+});
+
+test("before the first duel a lost connection joins afresh, and a stopped seat leaves the room", async (t) => {
+  const { seat, link, folder } = await setup(t);
+  const pending = seat.answer({ submit: true });
+  await tick();
+  link.deliver(stocPacket(YGOProStocJoinGame, { info: HOST_INFO }));
+  link.deliver(stocPacket(YGOProStocTypeChange, { type: 0x10 | 0 }));
+  link.take();
+  link.serverClose();
+  await delay(20);
+  assert.equal(link.connects.length, 2);
+  link.deliver(stocPacket(YGOProStocJoinGame, { info: HOST_INFO }));
+  assert.deepEqual(types(link.take()), [YGOProCtosPlayerInfo, YGOProCtosJoinGame, YGOProCtosUpdateDeck, YGOProCtosHsReady]);
+  assert.equal(seat.snapshot().waiting, null);
+  await seat.close();
+  assert.equal(await pending, "disconnected");
+  assert.deepEqual(types(link.take()), [YGOProCtosLeaveGame]);
+  assert.equal(await readFile(join(folder, "results.jsonl"), "utf8").catch(() => ""), "");
+});
+
+test("one blocking call at a time; surrender only in a duel", async (t) => {
   const { seat, link } = await setup(t);
   await joinRoom(seat, link);
   assert.throws(() => seat.surrender(), SeatError, "not in the duel phase yet");
@@ -454,9 +585,6 @@ test("unknown game messages become unreadable events; one blocking call at a tim
   await tick();
   await assert.rejects(seat.wait(), /already waiting/);
   await startDuel(seat, link);
-  link.deliver(Buffer.from([3, 0, 1, 0xfe, 7]));
-  assert.equal(lastEvent(seat).kind, "unreadable");
-  assert.match(lastEvent(seat).text, /254/);
   link.deliver(idle(0));
   assert.equal(await first, "prompt");
   link.take();

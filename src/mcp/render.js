@@ -103,6 +103,7 @@ function statusLines(view) {
   if (view.disconnected) return [`Disconnected: ${view.disconnected}`];
   if (view.phase === "ended") return ["The match is over."];
   if (view.waiting === "server") return ["Waiting for the server to finish the match."];
+  if (view.waiting === "rejoin") return ["Rejoining the match after a lost connection."];
   return view.waiting ? ["Waiting for the opponent."] : [];
 }
 

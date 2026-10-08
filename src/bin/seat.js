@@ -34,7 +34,7 @@ async function main() {
       if (stopping) return;
       stopping = true;
       log.info({ why }, "seat stopping");
-      await seat.close();
+      await seat.close(why);
       await handle.close();
       process.exit(0);
     };

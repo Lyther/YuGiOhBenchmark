@@ -123,7 +123,7 @@ function boardView(board, catalog) {
 
 function waitingOf(state) {
   if (state.prompt || ["deck", "ended", "disconnected"].includes(state.phase)) return null;
-  return state.waiting === "server" ? "server" : "opponent";
+  return state.waiting === "server" || state.waiting === "rejoin" ? state.waiting : "opponent";
 }
 
 function nextSentence(state) {
@@ -134,6 +134,7 @@ function nextSentence(state) {
   if (prompt?.kind === "side") return 'Side Deck: submit with answer {"submit": true} when ready.';
   if (prompt) return `Answer prompt ${prompt.seq}: ${answerHelp(prompt)}.`;
   if (state.waiting === "server") return "The server is finishing the match; call wait.";
+  if (state.waiting === "rejoin") return "The seat lost its connection and is rejoining the match; call wait.";
   return "The opponent or the server is acting; call wait.";
 }
 

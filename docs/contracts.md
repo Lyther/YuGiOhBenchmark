@@ -42,7 +42,9 @@ All entities live in one seat process and die with it, except the run-folder fil
     - `duel → side` (`CHANGE_SIDE`);
     - `side → first | duel` (next duel);
     - `duel | side → ended` (`DUEL_END`, then the replay wait in architecture Runtime View);
-    - any phase → `disconnected`.
+    - any phase → `disconnected` (a refused join, or a rejoin that was refused or ran out of attempts; see Rejoin).
+
+    A lost connection or a server packet the seat could not handle changes no phase: the seat rejoins with `waiting: rejoin`.
 
     Owner: `controller.js`.
   - `prompt`: the current Prompt or none. At most one prompt is pending. `lastPrompt` is kept for `MSG_RETRY`.
@@ -105,7 +107,8 @@ Not stored anywhere: model reasoning, tool-call history (the runtime keeps it), 
   - `{"type":"match","room":"M,TM0,NF#abc123","result":"win","score":{"me":2,"opponent":1,"draws":0},"opponent":"gpt-seat","at":"…"}`, written once when the server ends the match, whether that took one, two or three duels.
     - A lost connection (`reasonCode` 4) ends the match. The player who stayed wins it whatever the score, and the line adds `"forfeit":true`. A leave between duels adds no `duel` line, because no duel was played.
     - A match-winning card effect (`MSG_MATCH_KILL`) ends the match after its duel. That duel's winner wins the match whatever the score, and the line adds `"matchKill":true`. If that duel is a draw, the score decides.
-  - `{"type":"aborted","room":"…","phase":"duel","duel":2,"reason":"server-closed","at":"…"}`, written once if the seat disconnects before `match`.
+  - `{"type":"aborted","room":"…","phase":"duel","duel":2,"reason":"could not rejoin after 6 attempts (first: server-closed; last: server-closed)","at":"…"}`, written once if the seat disconnects before `match`.
+  - `{"type":"interrupted","room":"…","phase":"duel","duel":2,"turn":5,"reason":"stdin closed","at":"…"}`, written when the seat process stops during a started match. It is not a result: the server still holds the seat (Rejoin).
   - `reason` is the catalog's `!victory` text for `reasonCode`, or `"#<code>"` if unknown.
   - Consumers must ignore unknown fields; new fields are only ever added.
 - **`duel-<n>.ydk`.** The standard YDK text of the deck sent for duel *n*, written at each successful submit.
@@ -113,6 +116,20 @@ Not stored anywhere: model reasoning, tool-call history (the runtime keeps it), 
 - **`session.bin`.** Written only when `YGO_CAPTURE=1`. Each received packet is stored as a record: `u32le` milliseconds since connect, `u16le` length, then the full packet bytes including the 2-byte length and 1-byte STOC id. It is the fixture format for `test/fixtures/sessions/`.
 - **Write failures.** An error event plus a log line; play continues.
 - **Retention.** Left to the operator. `runs/` is gitignored.
+
+## Rejoin
+
+Resume first: a lost connection or a damaged seat state never gives a match up by itself. The seat comes back through srvpro's reconnect, which holds a dropped player's duel and lets the same player back in.
+
+- **Triggers.** The server closing the socket, a socket error, or a server packet the seat could not read or handle (`unreadable` event). A failed packet can leave the board or the pending prompt stale, so the seat drops its connection and reloads the server's copy. Faults rejoin at most twice per duel; after that the seat reports them and plays on with what it has.
+- **Before the first duel** (srvpro's lobby stage) srvpro does not hold the seat. The rejoin is a fresh join that sends the deck and `READY` again; after a refused deck it waits for the model's submit.
+- **After the first duel started**, the rejoin sends `PLAYER_INFO` and `JOIN_GAME` with the same name and room, then `UPDATE_DECK` with the deck last sent before the first duel (srvpro compares those bytes). It never sends `READY` (during siding that would mark the side deck submitted). srvpro then sends `DUEL_START` and, by stage: `SELECT_HAND`, `SELECT_TP`, `CHANGE_SIDE`, or mid-duel an `MSG_START` with empty decks, `MSG_NEW_TURN`, `MSG_NEW_PHASE`, `MSG_RELOAD_FIELD`, `MSG_UPDATE_DATA` per location, and the pending hint and prompt (verified on 2339, fixtures `rejoin-a-*.bin`).
+  - That `MSG_START` continues the current duel: no duel is counted and the turn count is kept, because the server does not resend it.
+  - The pending prompt is cleared at the drop and comes back as a new prompt `seq`.
+- **Attempts.** Backoff 1, 2, 4, 8, 16, 16 s, each with jitter in [0.5, 1.5): about 47 s, inside srvpro's default 90 s hold (2339 held a dropped seat for more than 5 minutes). At most 10 rejoins per match.
+- **Refusals end the match record.** Seated as an observer (srvpro no longer holds the seat), or a deck error (the deck differs) → `disconnected` with that reason and an `aborted` line. So does running out of attempts. A fault alone never records a duel or match result.
+- **Stopping.** A seat that stops during a started match (stdin closed, `SIGTERM`, `SIGINT`) does not send `LEAVE_GAME`, which would forfeit; it writes an `interrupted` line and closes the socket. srvpro forfeits the seat only if nobody rejoins within its hold. Before the first duel and after the match the seat leaves normally.
+- **Limits.** A duel that ends while the seat is away (the opponent surrendered) is not seen; srvpro resends no `MSG_WIN`. A match-winning effect announced while away is lost the same way.
 
 ## MCP Tools
 
@@ -127,7 +144,7 @@ Rules shared by all tools:
   - The seat logs each result's size.
 - **Errors.**
   - Argument shape errors are rejected by the schema.
-  - Seat-state errors return `isError: true` with one sentence and a `next` hint. The cases are: no pending prompt, an answer field that does not fit the prompt kind, an option number out of range, an unknown card name in a deck edit, chat while not connected, or a tool called after `disconnected`.
+  - Seat-state errors return `isError: true` with one sentence and a `next` hint. The cases are: no pending prompt, an answer field that does not fit the prompt kind, an option number out of range, an unknown card name in a deck edit, chat while not connected, an answer, chat or surrender while the seat is rejoining, or a tool called after `disconnected`.
   - Server rejections are never tool errors. They come back as the next prompt with `rejected`.
 - **Annotations.** `deck_show`, `card` and `card_search` declare `readOnlyHint: true`; the other tools declare none. Approval is configured in the runtime (architecture Operations), not inferred from hints.
 - **Concurrency.** At most one blocking call (`wait`, `answer`, `surrender`) runs at a time per seat. A second one returns an `isError` that says a call is already waiting. `deck_show`, `deck_edit`, `card`, `card_search` and `chat` can run at any time, including while a `wait` is blocked.
@@ -208,7 +225,7 @@ Rules shared by all tools:
   - `board: BoardView | null` (null means unchanged), `boardVersion`.
   - `events: EventView[]`: every event after the cursor.
   - `prompt: PromptView | null`.
-  - `waiting`: `opponent | server | null`.
+  - `waiting`: `opponent | server | rejoin | null`.
   - `disconnected`: a reason or null.
   - `next`: one imperative sentence telling the model what to call.
 - **BoardView.**

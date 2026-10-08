@@ -176,6 +176,9 @@ test("next tells the model what to call in each state", () => {
   assert.equal(seatView(state({ phase: "disconnected", disconnect: { reason: "server-closed" } }), { catalog }).dto.disconnected, "server-closed");
   assert.equal(seatView(state({ waiting: "server" }), { catalog }).dto.waiting, "server");
   assert.equal(seatView(state(), { catalog }).dto.waiting, "opponent");
+  const rejoining = seatView(state({ waiting: "rejoin" }), { catalog }).dto;
+  assert.equal(rejoining.waiting, "rejoin");
+  assert.match(rejoining.next, /rejoining the match; call wait/);
 });
 
 test("deck views group copies by code in first-seen order with section counts", async () => {

@@ -3,10 +3,11 @@ import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { setImmediate as tick } from "node:timers/promises";
+import { setTimeout as delay, setImmediate as tick } from "node:timers/promises";
 
 import { YGOProStocGameMsg, YGOProStocReplay } from "ygopro-msg-encode";
 
+import { parseDeck } from "../../src/deck/deck.js";
 import { createLogger } from "../../src/log.js";
 import { parseServerPacket } from "../../src/protocol/packets.js";
 import { createSeat } from "../../src/seat/controller.js";
@@ -101,5 +102,71 @@ test("replaying seat a's capture reproduces the live match: won 2-0 without a si
   assert.deepEqual(seat.snapshot().match.score, { me: 2, opponent: 0, draws: 0 });
   assert.equal(link.sent.filter((packet) => packet.constructor.name === "YGOProCtosSurrender").length, 0);
   assert.equal(seat.snapshot().board.duel, 2);
+  await seat.close();
+});
+
+// The live rejoin probe on 2026-10-08 (fixtures/sessions/README.md): seat a's
+// lobby answers, then a duel prompt is held (dropped) or surrendered.
+function probeAct(seat, { duel, side }) {
+  const { prompt } = seat.snapshot();
+  if (!prompt) return null;
+  if (prompt.kind === "deck") return seat.answer({ submit: true });
+  if (prompt.kind === "side") return side === "submit" ? seat.answer({ submit: true }) : null;
+  if (prompt.kind === "rps" || prompt.kind === "first") return seat.answer({ choose: [1] });
+  return duel === "surrender" ? seat.surrender() : null;
+}
+
+async function feed(seat, link, name, plan) {
+  let pending = probeAct(seat, plan);
+  await tick();
+  for (const { packet } of await records(name)) {
+    link.deliver(packet);
+    if (seat.snapshot().prompt && pending) {
+      await pending;
+      pending = null;
+    }
+    pending ??= probeAct(seat, plan);
+    await tick();
+  }
+  return pending;
+}
+
+test("replaying a live rejoin: the seat comes back mid-duel and while siding, and finishes the match", async (t) => {
+  const runDir = await mkdtemp(join(tmpdir(), "ygo-rejoin-"));
+  t.after(() => rm(runDir, { recursive: true, force: true }));
+  const room = "M,TM0,NF#rc03a2fb92";
+  const deck = parseDeck(await readFile(new URL("../../decks/sample.ydk", import.meta.url), "utf8"));
+  const link = createLink();
+  const record = createRecorder({ runDir, room, name: "rc-a-733d" });
+  const seat = createSeat({
+    config: { host: "koishi.momobako.com", port: 2339, name: "rc-a-733d", room, version: 0x1362, waitMs: 2000 },
+    catalog, deck, record, connect: link.connect, log: createLogger("silent"), rejoinBaseMs: 1, random: () => 0.5,
+  });
+  const kinds = () => link.take().map((packet) => packet.constructor.name);
+  await feed(seat, link, "rejoin-a-1", { duel: "hold" });
+  assert.equal(seat.snapshot().prompt.kind, "command", "the first duel prompt is pending when the link drops");
+  kinds();
+  link.serverClose();
+  await delay(20);
+  await feed(seat, link, "rejoin-a-2", { duel: "surrender", side: "hold" });
+  assert.deepEqual(kinds(), ["YGOProCtosPlayerInfo", "YGOProCtosJoinGame", "YGOProCtosUpdateDeck", "YGOProCtosSurrender"]);
+  const { board } = seat.snapshot();
+  assert.deepEqual([board.duel, board.turn, board.lp.me, board.lp.opponent, board.sides.me.deck], [1, 1, 8000, 8000, 35]);
+  assert.ok(board.sides.me.hand.every((card) => card.code), "the reload's queries named every card in hand");
+  assert.equal(seat.snapshot().prompt.kind, "side");
+  link.serverClose();
+  await delay(20);
+  const last = await feed(seat, link, "rejoin-a-3", { duel: "surrender", side: "submit" });
+  assert.equal(await last, "ended");
+  assert.equal(link.connects.length, 3);
+  assert.deepEqual(kinds(), ["YGOProCtosPlayerInfo", "YGOProCtosJoinGame", "YGOProCtosUpdateDeck", "YGOProCtosUpdateDeck",
+    "YGOProCtosTpResult", "YGOProCtosSurrender"], "the lobby deck to rejoin, then the side deck; never READY");
+  const texts = seat.snapshot().events.map((event) => event.text);
+  for (const pattern of [/Lost the connection \(server-closed\); rejoining/, /Back in the match/, /Duel 1 continues from the server's copy/]) {
+    assert.ok(texts.some((text) => pattern.test(text)), String(pattern));
+  }
+  const lines = (await readFile(join(record.folder, "results.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(lines.map((line) => [line.type, line.result]), [["duel", "loss"], ["duel", "loss"], ["match", "loss"]]);
+  assert.deepEqual((await readdir(record.folder)).sort(), ["duel-1.ydk", "duel-2.ydk", "replay-1.yrp", "replay-2.yrp", "results.jsonl"]);
   await seat.close();
 });

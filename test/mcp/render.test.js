@@ -104,6 +104,7 @@ test("sum and counter prompts show values, mode, mandatory cards and the total",
 test("disconnected and ended views say so plainly", () => {
   assert.match(renderSeat({ ...deckView, phase: "disconnected", prompt: null, disconnected: "server-closed", next: "x" }), /Disconnected: server-closed/);
   assert.match(renderSeat({ ...deckView, phase: "duel", prompt: null, waiting: "opponent", next: "x" }), /Waiting for the opponent/);
+  assert.match(renderSeat({ ...deckView, phase: "duel", prompt: null, waiting: "rejoin", next: "x" }), /Rejoining the match after a lost connection/);
 });
 
 test("card info and search results are readable on their own", () => {

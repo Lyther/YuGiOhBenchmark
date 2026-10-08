@@ -5,6 +5,7 @@ import {
   PlayerChangeState,
   YGOProMsgHint,
   YGOProMsgMatchKill,
+  YGOProMsgReloadField,
   YGOProMsgRetry,
   YGOProMsgStart,
   YGOProMsgWin,
@@ -40,6 +41,17 @@ import {
 export class SeatError extends Error {}
 
 const REPLAY_GRACE_MS = 15_000;
+// A lost connection is rejoined with backoff 1, 2, 4, 8, 16, 16 s, each with
+// jitter in [0.5, 1.5): about 47 s, inside srvpro's reconnect wait (90 s by
+// default; 2339 held a dropped seat for more than 5 minutes on 2026-10-08).
+const REJOIN_ATTEMPTS = 6;
+const REJOIN_BASE_MS = 1000;
+const REJOIN_CAP_MS = 16_000;
+// Rejoins per match, so a flapping link cannot loop forever.
+const MATCH_REJOINS = 10;
+// A packet the seat cannot handle reloads the duel through a rejoin, at most
+// this often per duel; a deterministic fault would otherwise repeat.
+const FAULT_REJOINS = 2;
 const OBSERVER = 7;
 const LOST_CONNECTION = 0x4;
 const CONTROL_CHARS = /\p{Cc}/gu;
@@ -47,6 +59,7 @@ const PLAYER_TYPES = 4;
 const RPS_NAMES = Object.fromEntries(RPS_CHOICES.map(([label, value]) => [value, label]));
 const SIDE_REFUSED = "the Side Deck was refused: keep the same Main, Extra and Side counts and only swap cards between them";
 const RETRY_TEXT = "The server rejected the previous answer (MSG_RETRY); choose again.";
+const REJOINING = "the seat is rejoining the match after a lost connection; call wait";
 const DECK_ERRORS = Object.freeze({
   [DeckErrorType.LFLIST]: (card) => `${card} is not allowed by the banlist`,
   [DeckErrorType.OCGONLY]: (card) => `${card} is OCG-only here`,
@@ -101,15 +114,26 @@ class Seat {
     [YGOProMsgHint, (seat, msg) => seat.#onHint(msg)],
     [YGOProMsgWin, (seat, msg) => seat.#onWin(msg)],
     [YGOProMsgMatchKill, (seat, msg) => seat.#onMatchKill(msg)],
+    [YGOProMsgReloadField, (seat, msg) => seat.#onReloadField(msg)],
     [YGOProMsgRetry, (seat) => seat.#onRetry()],
   ]);
 
-  #config; #catalog; #record; #connect; #log; #graceMs;
+  #config; #catalog; #record; #connect; #log; #graceMs; #random; #rejoinBaseMs;
   #connection = null;
+  #generation = 0;
+  #version;
   #joined = false;
   #versionRetried = false;
-  #reconnecting = false;
   #closing = false;
+  // srvpro keeps a dropped seat only once a duel has started (duel_stage past
+  // BEGIN), and lets it back with the deck bytes sent in the lobby.
+  #started = false;
+  #startDeck = null;
+  #rejoin = null;
+  #rejoinTimer = null;
+  #rejoins = 0;
+  #faults = 0;
+  #reloadTurn = null;
   #selfType = null;
   #ready = [false, false];
   #startSent = false;
@@ -125,13 +149,17 @@ class Seat {
   #finished = null;
   #state;
 
-  constructor({ config, catalog, deck, record, connect, log, replayGraceMs = REPLAY_GRACE_MS }) {
+  constructor({
+    config, catalog, deck, record, connect, log, replayGraceMs = REPLAY_GRACE_MS, rejoinBaseMs = REJOIN_BASE_MS, random = Math.random,
+  }) {
     this.#config = config;
     this.#catalog = catalog;
     this.#record = record;
     this.#connect = connect;
     this.#log = log;
     this.#graceMs = replayGraceMs;
+    this.#rejoinBaseMs = rejoinBaseMs;
+    this.#random = random;
     this.#state = {
       phase: "deck", room: config.room, name: config.name, host: false, opponent: null, opponentReady: false,
       prompt: null, lastPrompt: null, promptSeq: 0, events: [], board: null, hint: null,
@@ -195,6 +223,7 @@ class Seat {
 
   chat(text) {
     this.#requireLive();
+    if (this.#rejoin) throw new SeatError(REJOINING);
     if (!this.connected) throw new SeatError("not connected yet: chat works after the first deck submit");
     this.#send(encodeChat(text));
     return { sent: text };
@@ -214,20 +243,30 @@ class Seat {
     if (this.#state.prompt?.kind === "deck") this.#state.prompt = { ...this.#state.prompt, text: this.#deckText() };
   }
 
-  async close() {
+  // A started match is not left on purpose: srvpro keeps a dropped seat for a
+  // while, so a restarted seat can still resume it (contracts.md Rejoin).
+  async close(why = "seat stopped") {
     if (this.#closing) return;
     this.#closing = true;
     clearTimeout(this.#replayTimer);
+    clearTimeout(this.#rejoinTimer);
+    const { phase, match } = this.#state;
+    const resumable = this.#started && phase !== "ended" && phase !== "disconnected";
+    if (resumable) this.#writeResult({ type: "interrupted", phase, duel: match.duel, turn: this.#state.board?.turn ?? 0, reason: why });
     if (this.#connection && !this.#connection.closed) {
-      try {
-        this.#connection.send(encodeLeaveGame());
-      } catch (error) {
-        this.#log.debug({ err: error }, "leave not sent");
-      }
+      if (!resumable) this.#sendLeave();
       await this.#connection.close();
     }
     this.#wake("disconnected");
     await this.#record.close();
+  }
+
+  #sendLeave() {
+    try {
+      this.#connection.send(encodeLeaveGame());
+    } catch (error) {
+      this.#log.debug({ err: error }, "leave not sent");
+    }
   }
 
   // Waiting and prompts --------------------------------------------------------
@@ -281,11 +320,12 @@ class Seat {
   // Sending ------------------------------------------------------------------
 
   #send(bytes) {
-    if (!this.#connection || this.#connection.closed) throw new SeatError("not connected");
+    if (!this.#connection || this.#connection.closed) throw new SeatError(this.#rejoin ? REJOINING : "not connected");
     this.#connection.send(bytes);
   }
 
   async #perform(action, prompt) {
+    if (this.#rejoin) throw new SeatError(REJOINING);
     if (action.type === "deck") {
       if (this.#connection) this.#submitDeck(prompt.kind === "side");
       else await this.#join();
@@ -299,6 +339,8 @@ class Seat {
   #submitDeck(side) {
     this.#state.submitted = copyDeck(this.#state.deck);
     this.#send(encodeUpdateDeck(this.#state.deck));
+    // srvpro checks a rejoin against the last deck sent before the first duel.
+    if (!this.#started) this.#startDeck = this.#state.submitted;
     this.#sideSubmitted = side;
     if (side) return;
     this.#state.phase = "lobby";
@@ -320,17 +362,28 @@ class Seat {
 
   async #open(version) {
     this.#joined = false;
+    this.#version = version;
+    // Callbacks of a dropped connection are ignored, including its close.
+    const generation = ++this.#generation;
+    const current = (handle) => (...args) => {
+      if (generation === this.#generation) handle(...args);
+    };
     try {
       this.#connection = await this.#connect({
         host: this.#config.host,
         port: this.#config.port,
         timeoutMs: this.#config.connectTimeoutMs,
-        onMessage: (parsed, packet) => this.#onPacket(parsed, packet),
-        onError: (error, packet) => this.#onUnreadable(error, packet),
-        onClose: (closed) => this.#onClose(closed),
+        onMessage: current((parsed, packet) => this.#onPacket(parsed, packet)),
+        onError: current((error, packet) => this.#onUnreadable(error, packet)),
+        onClose: current((closed) => this.#onClose(closed)),
       });
     } catch (error) {
-      this.#disconnect(`connect failed: ${error.message}`);
+      if (this.#rejoin) this.#scheduleRejoin(`connect failed: ${error.message}`);
+      else this.#disconnect(`connect failed: ${error.message}`);
+      return;
+    }
+    if (this.#closing) {
+      await this.#drop();
       return;
     }
     this.#record.startCapture();
@@ -343,8 +396,15 @@ class Seat {
   #onPacket({ message, raw }, packet) {
     this.#record.packet(packet);
     const handle = Seat.#stoc.get(message?.constructor);
-    if (handle) handle(this, message, raw);
-    else this.#log.debug({ id: packet[2], type: message?.constructor?.name ?? message?.kind }, "server packet not used");
+    if (!handle) {
+      this.#log.debug({ id: packet[2], type: message?.constructor?.name ?? message?.kind }, "server packet not used");
+      return;
+    }
+    try {
+      handle(this, message, raw);
+    } catch (error) {
+      this.#onFault(error, packet);
+    }
   }
 
   #onUnreadable(error, packet) {
@@ -353,22 +413,85 @@ class Seat {
       this.#onReplay(packet.subarray(3));
       return;
     }
-    this.#log.error({ err: error, id: packet[2] }, "unreadable server packet");
-    this.#event("unreadable", `Unreadable server packet ${packet[2]}: ${error.message}`);
+    this.#onFault(error, packet);
+  }
+
+  // A packet the seat could not read or handle: its state may now be stale.
+  // In a started match the server's copy is reloaded through a rejoin; the
+  // fault itself never ends the match or records a result.
+  #onFault(error, packet) {
+    this.#log.error({ err: error, id: packet[2], packet: packet.subarray(0, 256).toString("hex") }, "server packet not handled");
+    this.#event("unreadable", `The seat could not handle server packet ${packet[2]}: ${error.message}`);
+    if (!this.#started || this.#rejoin || this.#closing || !this.#isLive()) return;
+    if (this.#faults >= FAULT_REJOINS) {
+      this.#event("unreadable", "The seat keeps failing in this duel and stops reloading it; the board may be out of date");
+      return;
+    }
+    this.#faults += 1;
+    this.#startRejoin(`seat error: ${error.message}`);
+  }
+
+  #isLive() {
+    return this.#state.phase !== "ended" && this.#state.phase !== "disconnected";
   }
 
   #onClose({ reason, error }) {
-    if (this.#closing || this.#reconnecting || this.#state.phase === "ended") return;
+    if (this.#closing || this.#state.phase === "ended") return;
     if (this.#replayTimer !== null) {
       this.#finishMatch();
       return;
     }
-    this.#disconnect(error ? `${reason}: ${error.message}` : reason);
+    const why = error ? `${reason}: ${error.message}` : reason;
+    if (this.#rejoin) this.#scheduleRejoin(why);
+    else this.#startRejoin(why);
+  }
+
+  // Resume first: the seat comes back instead of giving the match up. Before
+  // the first duel this is a fresh join; afterwards srvpro restores the seat.
+  #startRejoin(reason) {
+    if (!this.#isLive()) return;
+    if (this.#rejoins >= MATCH_REJOINS) {
+      this.#disconnect(`${reason}; no rejoin left (${MATCH_REJOINS} this match)`);
+      return;
+    }
+    this.#rejoins += 1;
+    this.#rejoin = { reason, attempts: 0 };
+    // srvpro resends a started match's pending prompt; the deck prompt is ours.
+    if (this.#started) this.#state.prompt = null;
+    this.#ready = [false, false];
+    this.#startSent = false;
+    this.#state.waiting = "rejoin";
+    this.#log.warn({ reason, phase: this.#state.phase }, "connection lost; rejoining");
+    this.#event("server", `Lost the connection (${reason}); rejoining the match`);
+    this.#drop().then(() => this.#scheduleRejoin(reason));
+  }
+
+  #scheduleRejoin(reason) {
+    const rejoin = this.#rejoin;
+    if (!rejoin || this.#closing) return;
+    if (rejoin.attempts >= REJOIN_ATTEMPTS) {
+      this.#disconnect(`could not rejoin after ${REJOIN_ATTEMPTS} attempts (first: ${rejoin.reason}; last: ${reason})`);
+      return;
+    }
+    rejoin.attempts += 1;
+    const step = Math.min(this.#rejoinBaseMs * 2 ** (rejoin.attempts - 1), REJOIN_CAP_MS);
+    this.#rejoinTimer = setTimeout(() => this.#open(this.#version), step * (0.5 + this.#random()));
+  }
+
+  // Closes the connection without leaving the game, so srvpro keeps the seat.
+  async #drop() {
+    const connection = this.#connection;
+    this.#connection = null;
+    this.#joined = false;
+    this.#generation += 1;
+    if (connection && !connection.closed) await connection.close();
   }
 
   #disconnect(reason) {
     const phase = this.#state.phase;
     if (phase === "ended" || phase === "disconnected") return;
+    this.#rejoin = null;
+    clearTimeout(this.#rejoinTimer);
     this.#state.phase = "disconnected";
     this.#state.disconnect = { reason };
     this.#state.prompt = null;
@@ -390,6 +513,11 @@ class Seat {
   // Lobby --------------------------------------------------------------------
 
   #onError(message) {
+    if (this.#rejoin && this.#started) {
+      const detail = message.msg === ErrorMessageType.DECKERROR ? "the deck differs from the one this match started with" : `${ErrorMessageType[message.msg] ?? message.msg} ${message.code}`;
+      this.#refuseRejoin(detail);
+      return;
+    }
     if (message.msg === ErrorMessageType.VERERROR) {
       this.#onVersion(message.code).catch((error) => this.#disconnect(`reconnect failed: ${error.message}`));
       return;
@@ -414,10 +542,7 @@ class Seat {
     }
     this.#versionRetried = true;
     this.#log.info({ version: this.#config.version, offered }, "version mismatch; reconnecting once");
-    this.#reconnecting = true;
-    await this.#connection.close();
-    this.#reconnecting = false;
-    this.#connection = null;
+    await this.#drop();
     await this.#open(offered);
   }
 
@@ -430,16 +555,35 @@ class Seat {
     this.#setPrompt({ ...lobbyPrompt("deck", { text: this.#deckText() }), rejected: reason });
   }
 
+  #refuseRejoin(detail) {
+    this.#disconnect(`the server refused the rejoin: ${detail}`);
+    this.#drop().catch((error) => this.#log.debug({ err: error }, "refused connection not closed"));
+  }
+
   #onJoin({ info }) {
     this.#joined = true;
+    if (this.#rejoin && this.#started) {
+      this.#event("lobby", `Rejoined room ${this.#config.room}; the server is restoring the match`);
+      this.#send(encodeUpdateDeck(this.#startDeck));
+      return;
+    }
+    this.#rejoin = null;
+    this.#state.waiting = null;
     const format = ["single duel", "match (Bo3)", "tag duel"][info.mode] ?? `mode ${info.mode}`;
     const banlist = info.lflist ? `banlist ${info.lflist}` : "no banlist";
     const clock = info.time_limit ? `${info.time_limit} s clock` : "no clock";
     this.#event("lobby", `Joined room ${this.#config.room}: ${format}, ${banlist}, ${clock}`);
-    this.#submitDeck(false);
+    // After a refused deck the model resubmits; otherwise the join submits.
+    if (this.#state.phase !== "deck") this.#submitDeck(false);
   }
 
   #onTypeChange(message) {
+    // srvpro seats a recognized rejoin in its old place; anything else joined
+    // as a spectator because the match no longer holds this seat.
+    if (this.#rejoin && this.#started && message.playerPosition > 1) {
+      this.#refuseRejoin("it seated this seat as an observer");
+      return;
+    }
     this.#selfType = message.playerPosition;
     this.#state.host = message.isHost;
   }
@@ -449,7 +593,8 @@ class Seat {
     // The name is the other client's text and appears in the model's view.
     const name = raw.replace(CONTROL_CHARS, " ");
     this.#state.opponent = name;
-    this.#event("lobby", `${name} joined the room`);
+    // A rejoin lists the players again; the opponent did not just arrive.
+    if (!this.#rejoin) this.#event("lobby", `${name} joined the room`);
   }
 
   #onPlayerChange({ playerPosition: position, playerState }) {
@@ -479,6 +624,13 @@ class Seat {
   // A seat that leaves while siding also makes the server send DUEL_START to
   // whoever has not submitted; that is no accepted deck.
   #onDuelStart() {
+    if (this.#rejoin) {
+      this.#rejoin = null;
+      this.#state.waiting = null;
+      this.#event("server", "Back in the match; the server resends the board and any pending prompt");
+      return;
+    }
+    this.#started = true;
     if (this.#state.phase === "side" && this.#sideSubmitted) this.#deckAccepted(this.#state.match.duel + 1);
   }
 
@@ -559,11 +711,7 @@ class Seat {
   // Duel ---------------------------------------------------------------------
 
   #onGame({ msg }, raw) {
-    if (!msg) {
-      this.#log.error({ id: raw[0] }, "unreadable game message");
-      this.#event("unreadable", `Unreadable game message ${raw[0]}`);
-      return;
-    }
+    if (!msg) throw new Error(`unknown game message ${raw[0]}`);
     const handle = Seat.#game.get(msg.constructor);
     if (handle) {
       handle(this, msg);
@@ -580,14 +728,38 @@ class Seat {
     this.#state.board = applyBoard(board, msg, { catalog: this.#catalog });
   }
 
+  // A rejoin's field reload (srvpro RequestField) restarts the stream with an
+  // MSG_START whose decks are empty; it continues the duel this seat was in.
   #onStart(msg) {
     const { match } = this.#state;
-    match.duel += 1;
-    this.#duelsPlayed = match.duel;
-    this.#state.board = createBoard({ duel: match.duel, start: msg, version: (this.#state.board?.version ?? -1) + 1 });
+    const previous = this.#state.board;
+    const reload = msg.player0.deckCount === 0 && msg.player1.deckCount === 0;
+    const duel = reload && previous ? match.duel : match.duel + 1;
+    const board = createBoard({ duel, start: msg, version: (previous?.version ?? -1) + 1 });
+    if (!reload && !this.#decksRecorded.has(duel)) this.#deckAccepted(duel);
+    match.duel = duel;
+    this.#duelsPlayed = duel;
+    this.#state.board = board;
     this.#state.phase = "duel";
     this.#state.prompt = null;
-    this.#event("duel", `Duel ${match.duel} starts: ${this.#state.board.me === 0 ? "you go first" : "you go second"}`);
+    if (reload) {
+      this.#reloadTurn = previous?.turn ?? this.#reloadTurn;
+      this.#event("duel", `Duel ${duel} continues from the server's copy of the field`);
+      return;
+    }
+    this.#faults = 0;
+    this.#event("duel", `Duel ${duel} starts: ${board.me === 0 ? "you go first" : "you go second"}`);
+  }
+
+  // The server does not resend the turn count; the seat keeps its own.
+  #onReloadField(msg) {
+    const board = this.#state.board;
+    if (!board) return;
+    const next = applyBoard(board, msg, { catalog: this.#catalog });
+    if (this.#reloadTurn !== null) next.turn = this.#reloadTurn;
+    this.#reloadTurn = null;
+    this.#state.board = next;
+    this.#event("server", `The server reloaded the field: turn ${next.turn}, your LP ${next.lp.me}, opponent's LP ${next.lp.opponent}`);
   }
 
   #onHint(msg) {
@@ -607,6 +779,7 @@ class Seat {
     const me = (inDuel ? board?.me : this.#selfType) ?? 0;
     const result = msg.player === me ? "win" : msg.player === 1 - me ? "loss" : "draw";
     const reason = this.#catalog.victoryReason(msg.type) ?? `#${msg.type}`;
+    const event = inDuel && board ? describeEvent(msg, { board, catalog: this.#catalog }) : null;
     // A lost connection ends the whole match: the player who stayed wins it.
     if (msg.type === LOST_CONNECTION) this.#forfeit = result;
     if (!inDuel) {
@@ -623,7 +796,6 @@ class Seat {
     else match.score.draws += 1;
     const line = { duel: match.duel, result, reason, reasonCode: msg.type, turns: board?.turn ?? 0, first: me === 0 };
     match.results.push(line);
-    const event = board && describeEvent(msg, { board, catalog: this.#catalog });
     if (event) this.#event(event.kind, event.text);
     this.#state.prompt = null;
     this.#writeResult({ type: "duel", ...line });

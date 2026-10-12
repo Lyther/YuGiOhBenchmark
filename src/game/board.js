@@ -193,10 +193,20 @@ function draw(board, { player, cards }) {
   for (const raw of cards) state.hand.push({ code: cardCode(raw), position: isPublic(raw) ? C.POS_FACEUP : C.POS_FACEDOWN });
 }
 
+// What queries say about a card beyond its code, position and links. The stock
+// client drops it when a query hides the card or names no code, and keeps the
+// rest (client_card.cpp UpdateInfo, ClearData).
+const QUERY_DATA = ["type", "attribute", "race", "attack", "defense", "level", "rank", "link", "scales", "counters", "negated"];
+
+function forgetData(card) {
+  for (const key of QUERY_DATA) delete card[key];
+}
+
 function mergeQuery(board, previous, query) {
   if (!query || (query.queryLength ?? 0) <= EMPTY_QUERY_LENGTH) return null;
-  if (!query.flags) return previous ?? unknownCard();
   const card = previous ? { ...previous } : unknownCard();
+  if (!query.flags || (query.code !== undefined && !cardCode(query.code))) forgetData(card);
+  if (!query.flags) return card;
   if (query.code !== undefined) card.code = cardCode(query.code);
   if (query.position !== undefined) card.position = query.position;
   // Current values, which effects can change from the printed card.
@@ -305,7 +315,10 @@ function shuffleExtra(board, { player, cards }) {
 function shuffleSetCards(board, { cards }) {
   const moved = cards.map(({ oldLocation }) => {
     const card = cardAt(board, oldLocation.controller, oldLocation.location, oldLocation.sequence);
-    if (card) card.code = 0;
+    if (card) {
+      card.code = 0;
+      forgetData(card);
+    }
     return card;
   });
   // A zero destination hides the permutation; the occupied slots stay put.

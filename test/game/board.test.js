@@ -244,6 +244,44 @@ test("a set-card shuffle keeps every occupied slot and follows disclosed materia
   assert.deepEqual(board.sides.me.monsters, Array(7).fill(null));
 });
 
+const QUERY_STATS = ["type", "attribute", "race", "attack", "defense", "level"];
+
+// Two opponent monsters the player saw face-up, with their stats, then set.
+function seenThenSet() {
+  let board = start(0);
+  const flags = C.QUERY_CODE | C.QUERY_POSITION | C.QUERY_TYPE | C.QUERY_ATTRIBUTE | C.QUERY_RACE | C.QUERY_ATTACK | C.QUERY_DEFENSE | C.QUERY_LEVEL;
+  for (const [sequence, code, attack, defense, level] of [[0, BLUE_EYES, 3000, 2500, 8], [1, UTOPIA, 2500, 2000, 4]]) {
+    const card = {
+      flags, code, controller: 1, location: MZONE, sequence, position: FACEUP_ATTACK, type: C.TYPE_MONSTER | C.TYPE_NORMAL,
+      attribute: C.ATTRIBUTE_LIGHT, race: C.RACE_DRAGON, attack, defense, level,
+    };
+    board = apply(board, YGOProMsgUpdateCard, { controller: 1, location: MZONE, sequence, card });
+    board = apply(board, YGOProMsgPosChange, { code, card: { controller: 1, location: MZONE, sequence }, previousPosition: FACEUP_ATTACK, currentPosition: FACEDOWN_DEFENSE });
+  }
+  return board;
+}
+
+// client_card.cpp UpdateInfo: a query that hides the card (no flags) clears
+// what earlier queries said about it but keeps its code and position.
+test("a hidden query keeps a card's code and position and drops its stats, as the stock client does", () => {
+  const board = apply(seenThenSet(), YGOProMsgUpdateCard, { controller: 1, location: MZONE, sequence: 0, card: { flags: 0 } });
+  const card = cardAt(board, 1, MZONE, 0);
+  assert.deepEqual([card.code, card.position], [BLUE_EYES, FACEDOWN_DEFENSE]);
+  assert.deepEqual(QUERY_STATS.filter((key) => card[key] !== undefined), []);
+});
+
+test("a hidden set-card shuffle leaves nothing that tells the shuffled cards apart", () => {
+  // Stock layout: every old location, then every new one; zero hides it.
+  const packet = Buffer.from([20, 0, 1, 36, 4, 2, 1, 4, 0, 8, 1, 4, 1, 8, 0, 0, 0, 0, 0, 0, 0, 0]);
+  let board = applyBoard(seenThenSet(), parseServerPacket(packet).message.msg);
+  for (const sequence of [0, 1]) board = apply(board, YGOProMsgUpdateCard, { controller: 1, location: MZONE, sequence, card: { flags: 0 } });
+  for (const sequence of [0, 1]) {
+    const card = cardAt(board, 1, MZONE, sequence);
+    assert.deepEqual([card.code, card.position], [0, FACEDOWN_DEFENSE]);
+    assert.deepEqual(QUERY_STATS.filter((key) => card[key] !== undefined), [], `slot ${sequence}`);
+  }
+});
+
 test("swapping Deck and GY returns Extra Deck monsters before face-up Pendulums", async () => {
   const catalog = await fixtureCatalog();
   let board = start(1);

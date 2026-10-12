@@ -291,7 +291,8 @@ class Seat {
   async close(why = "seat stopped") {
     if (this.#closing) return;
     this.#closing = true;
-    clearTimeout(this.#replayTimer);
+    // After DUEL_END the match is over; only a replay was still awaited.
+    if (this.#replayTimer !== null) this.#finishMatch();
     clearTimeout(this.#rejoinTimer);
     clearTimeout(this.#restoreTimer);
     const { phase, match } = this.#state;
@@ -798,9 +799,10 @@ class Seat {
     if (this.#replayTimer !== null && this.#replaysReceived >= this.#duelsPlayed) this.#finishMatch();
   }
 
-  // srvpro sends the replays it held right after DUEL_END; the match is
-  // reported over once one replay per duel arrived, the server closed, or the
-  // grace window passed, so the run folder is complete first.
+  // srvpro sends the replays it held just before DUEL_END. A replay that is
+  // still missing is waited for: the match is reported over once one replay per
+  // duel arrived, the server closed, the grace window passed or the seat
+  // stopped, so the run folder is complete first.
   #onDuelEnd() {
     this.#missedDuel();
     this.#state.waiting = "server";

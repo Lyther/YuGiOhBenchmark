@@ -324,6 +324,15 @@ async function results(folder) {
   return (await readFile(join(folder, "results.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
 }
 
+test("a seat stopped while it waits for a replay after DUEL_END records the match, not a resumable one", async (t) => {
+  const { seat, link, folder } = await setup(t, { replayGraceMs: 10_000 });
+  await joinRoom(seat, link);
+  await playDuel(seat, link, { winner: 0 });
+  link.deliver(stocPacket(YGOProStocDuelEnd));
+  await seat.close("stdin closed");
+  assert.deepEqual((await results(folder)).map((line) => [line.type, line.result]), [["duel", "win"], ["match", "win"]]);
+});
+
 test("an opponent who leaves while we side forfeits the match, read in lobby positions", async (t) => {
   const { seat, link, folder } = await setup(t);
   await joinRoom(seat, link);

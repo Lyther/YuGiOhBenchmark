@@ -214,6 +214,21 @@ test("confirmations reveal opponent hand cards and shuffles hide them again", ()
   assert.deepEqual(board.sides.opponent.hand.map((card) => card.code), [0, 0]);
 });
 
+// duelclient.cpp MSG_MOVE: the stock client keeps what a player saw of a card
+// when the server hides its code in a move, except into the Extra Deck.
+test("a card the player saw stays known through a move that hides it, except into the Extra Deck", () => {
+  let board = start(0);
+  board = apply(board, YGOProMsgDraw, { player: 1, count: 2, cards: [0, 0] });
+  board = apply(board, YGOProMsgConfirmCards, { player: 0, skipPanel: 0, count: 1, cards: [{ code: POT, controller: 1, location: HAND, sequence: 1 }] });
+  board = apply(board, YGOProMsgMove, { code: 0, previous: at(1, HAND, 1), current: at(1, SZONE, 2, C.POS_FACEDOWN), reason: 0 });
+  assert.equal(cardAt(board, 1, SZONE, 2).code, POT, "the revealed card it set");
+  board = apply(board, YGOProMsgMove, { code: 0, previous: at(1, SZONE, 2, C.POS_FACEDOWN), current: at(1, HAND, 1, FACEDOWN_DEFENSE), reason: 0 });
+  assert.deepEqual(board.sides.opponent.hand.map((card) => card.code), [0, POT], "and back in hand");
+  board = apply(board, YGOProMsgMove, { code: UTOPIA, previous: at(1, C.LOCATION_EXTRA, 0), current: at(1, MZONE, 5, FACEUP_ATTACK), reason: 0 });
+  board = apply(board, YGOProMsgMove, { code: 0, previous: at(1, MZONE, 5, FACEUP_ATTACK), current: at(1, C.LOCATION_EXTRA, 0, FACEDOWN_DEFENSE), reason: 0 });
+  assert.equal(board.sides.opponent.extra[0].code, 0, "a face-down Extra Deck card is unknown again");
+});
+
 test("a set-card shuffle keeps every occupied slot and follows disclosed material moves", () => {
   let board = start(0);
   board = apply(board, YGOProMsgMove, { code: BLUE_EYES, previous: at(1, HAND, 0), current: at(1, MZONE, 0, FACEDOWN_DEFENSE), reason: 0 });

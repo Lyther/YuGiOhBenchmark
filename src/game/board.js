@@ -163,7 +163,6 @@ function host(board, { controller, sequence }) {
 }
 
 function move(board, message) {
-  const code = cardCode(message.code);
   const from = message.previous;
   const to = message.current;
   let card = null;
@@ -174,6 +173,11 @@ function move(board, message) {
     card = take(board, from);
   }
   if (!to.location) return;
+  // Like the stock client (duelclient.cpp MSG_MOVE), a code the server hides
+  // keeps what the player saw, except into the Extra Deck; shuffles reset it.
+  // TODO: the stock client also tracks Deck cards seen on top (MSG_CONFIRM_DECKTOP)
+  // until a shuffle; the board counts the Deck only, so those leave it unknown.
+  const code = cardCode(message.code) || (to.location === C.LOCATION_EXTRA ? 0 : card?.code ?? 0);
   if (to.location & C.LOCATION_OVERLAY) {
     const xyz = host(board, to);
     if (xyz) (xyz.overlays ??= []).splice(to.position, 0, code);

@@ -7,10 +7,23 @@
     "node": ">=22"
   },
   "scripts": {
-    "start": "node src/seat/join-room.js",
-    "test": "node --test"
+    "submodules": "git submodule update --init --recursive",
+    "start": "node src/bin/probe.js",
+    "probe": "node src/bin/probe.js",
+    "test": "node --test \"test/**/*.test.js\"",
+    "cards": "node src/bin/cards.js",
+    "seat": "node src/bin/seat.js",
+    "smoke": "node src/bin/smoke.js"
   },
   "dependencies": {
-    "ygopro-msg-encode": "1.3.0"
+    "@modelcontextprotocol/client": "2.3.1",
+    "@modelcontextprotocol/server": "2.3.1",
+    "fflate": "0.8.3",
+    "pino": "10.4.0",
+    "sql.js": "1.14.2",
+    "ygopro-cdb-encode": "1.1.1",
+    "ygopro-deck-encode": "1.0.16",
+    "ygopro-msg-encode": "1.3.0",
+    "zod": "4.6.5"
   }
 }

@@ -17,7 +17,7 @@ Last updated: 2026-10-07
   - the run-folder output files.
 
   There is no HTTP or RPC surface.
-- **Canonical sources.** Until the code exists, this document is canonical. After that, each fact has one source in code:
+- **Canonical sources.** The code now exists, so each fact has one source in code:
   - tool inputs: the zod schemas in `src/mcp/tools.js`, with `test/mcp/tools.test.js` snapshotting `tools/list` so contract changes show up in review;
   - DTO mapping: `src/seat/view.js`;
   - file formats: `src/seat/record.js`;
@@ -42,7 +42,9 @@ All entities live in one seat process and die with it, except the run-folder fil
     - `duel → side` (`CHANGE_SIDE`);
     - `side → first | duel` (next duel);
     - `duel | side → ended` (`DUEL_END`, then the replay wait in architecture Runtime View);
-    - any phase → `disconnected`.
+    - any phase → `disconnected` (a refused join, or a rejoin that was refused or ran out of attempts; see Rejoin). A join the server answers by making the seat an observer is refused: the room has no free player place, and an observer would mirror another player's duel.
+
+    A lost connection or a server packet the seat could not handle changes no phase: the seat rejoins with `waiting: rejoin`.
 
     Owner: `controller.js`.
   - `prompt`: the current Prompt or none. At most one prompt is pending. `lastPrompt` is kept for `MSG_RETRY`.
@@ -50,7 +52,7 @@ All entities live in one seat process and die with it, except the run-folder fil
   - `delivered`: `{event, boardVersion}`, the last sequence number and board version returned to the caller. Both only increase.
   - `deck` (WorkingDeck) and `submitted` (a WorkingDeck snapshot or none).
   - `lobby`: `{host: boolean, opponent: string | null, opponentReady: boolean}`.
-  - `match`: `{duel, results: DuelResult[], score: {me, opponent, draws}}`. `duel` is the server's duel number, from 1. The seat assumes no match length: the server's `DUEL_END` ends the match after however many duels it took.
+  - `match`: `{duel, results: DuelResult[], score: {me, opponent, draws, unknown?}}`. `duel` is the server's duel number, from 1: the last duel that started, finished or not. `score.unknown` counts duels whose result is `unknown` and is present only when nonzero. The seat assumes no match length: the server's `DUEL_END` ends the match after however many duels it took.
   - `disconnect`: `{reason}` or none. It is set exactly once and ends the phase machine.
 - **Board** (owner `game/board.js`, one per duel, built at `MSG_START`).
   - `me`: the duel player index (0 or 1) from `MSG_START`. It is fixed for the duel and may change in the next one.
@@ -85,31 +87,55 @@ All entities live in one seat process and die with it, except the run-folder fil
 - **WorkingDeck** (owner `deck/deck.js`). `{main: code[], extra: code[], side: code[]}`, order preserved.
   - Codes are positive integers below 2^28.
   - There are no count or legality rules; the server owns them.
-- **DuelResult** (owner `controller.js`, persisted by `record.js`). `{duel, result: win | loss | draw, reason, reasonCode, turns, first: boolean, at}`.
+- **DuelResult** (owner `controller.js`, persisted by `record.js`). `{duel, result: win | loss | draw | unknown, reason, reasonCode, turns, first: boolean, at}`. `unknown` is a duel that ended without an `MSG_WIN` the seat handled (Rejoin, Limits). It has only `duel`, `result`, `reason: "the seat did not see it end"` and `at`, and it is never counted as a draw.
 - **Card** (catalog read model, owner `cards/catalog.js`, read-only).
-  - `{code, alias, name, text, kind (monster | spell | trap), types: string[], attribute?, race?, level?, rank?, link?, linkMarkers?, atk?, def?, scales?, setnames: string[], strings: string[16], source: en-US | super-pre-en | super-pre | zh-CN}`.
+  - `{code, alias, name, text, kind (monster | spell | trap), types: string[], attribute?, race?, level?, rank?, link?, linkMarkers?, atk?, def?, scales?, setnames: string[], strings: string[16], source: en-US | super-pre-en | super-pre | zh-CN | first-edition}`.
+  - `first-edition` means an operator pack replaced the text and effect strings; the name and stats are still those of the base source.
 
 Not stored anywhere: model reasoning, tool-call history (the runtime keeps it), the opponent's hidden cards, metrics.
 
 ## Persistent Data
 
-`record.js` is the only writer. All files are append-only or write-once. Nothing in the seat reads them back.
+`record.js` is the only writer. All files are append-only or write-once, except `seat.json`, which is replaced atomically. Write-once files are written under a temporary name and linked into place, so a hard stop leaves the whole file or none. The seat reads its folder back only to resume an interrupted match (Rejoin).
 
 - **Folder:** `<YGO_RUN_DIR>/<roomId>/<name>/`.
   - `roomId` is the part of `YGO_ROOM` after `#`.
-  - Both `roomId` and `name` are reduced to `[A-Za-z0-9._-]`, with other characters replaced by `_`.
-  - The folder is created at the first deck submit.
-- **`results.jsonl`.** UTF-8, one JSON object per line, append-only:
+  - Both `roomId` and `name` are reduced to `[A-Za-z0-9._-]`, with other characters replaced by `_`. A part that changed this way gets `-` and the first 8 hex digits of its SHA-256, so names that differ stay apart.
+  - The folder is claimed at the first deck submit, before anything is sent to the server:
+    - no folder: it is created;
+    - a folder whose `seat.json` names a seat process that has exited, with no `match` or `aborted` line: the new seat takes it over and resumes that match (a folder left before any duel started is reused afresh, its lobby deck file dropped);
+    - otherwise the submit fails with the reason and nothing is sent: the owning seat is still running (a colliding seat), the match is over (a rerun), or the folder holds no `seat.json`.
+- **`seat.json`.** The resume checkpoint, replaced atomically: `{"pid":4242,"started":true,"duel":2,"turn":5}`. It is written at the claim, at the first `DUEL_START` (`started`: srvpro now holds the seat on a drop), at each `MSG_START` and at each new turn, because a rejoin's field reload carries no turn count. A reload's `MSG_RELOAD_FIELD` writes the restored duel and turn; the `MSG_NEW_TURN` inside the reload is no new turn.
+- **`results.jsonl`.** UTF-8, one JSON object per line, append-only (when a seat resumes, a last line without its newline gets one if it parses and is cut off if not):
   - `{"type":"duel","room":"M,TM0,NF#abc123","duel":1,"result":"win","reason":"LP reached 0","reasonCode":1,"turns":7,"first":true,"at":"2026-10-07T12:00:00.000Z"}`
   - `{"type":"match","room":"M,TM0,NF#abc123","result":"win","score":{"me":2,"opponent":1,"draws":0},"opponent":"gpt-seat","at":"…"}`, written once when the server ends the match, whether that took one, two or three duels.
-  - `{"type":"aborted","room":"…","phase":"duel","duel":2,"reason":"server-closed","at":"…"}`, written once if the seat disconnects before `match`.
+    - `result` is `win` if `me > opponent + unknown`, `loss` if `opponent > me + unknown`, and otherwise `unknown` when some duel is `unknown` (`score` then has `unknown`), else `draw`.
+    - A lost connection (`reasonCode` 4) ends the match. The player who stayed wins it whatever the score, and the line adds `"forfeit":true`. A leave between duels adds no `duel` line, because no duel was played.
+    - A match-winning card effect (`MSG_MATCH_KILL`) ends the match after its duel. That duel's winner wins the match whatever the score, and the line adds `"matchKill":true`. If that duel is a draw, the score decides.
+  - `{"type":"aborted","room":"…","phase":"duel","duel":2,"reason":"could not rejoin after 6 attempts (first: server-closed; last: server-closed)","at":"…"}`, written once if the seat disconnects before `match`.
+  - `{"type":"interrupted","room":"…","phase":"duel","duel":2,"turn":5,"reason":"stdin closed","at":"…"}`, written when the seat process stops during a started match. It is not a result: the server still holds the seat (Rejoin).
   - `reason` is the catalog's `!victory` text for `reasonCode`, or `"#<code>"` if unknown.
   - Consumers must ignore unknown fields; new fields are only ever added.
 - **`duel-<n>.ydk`.** The standard YDK text of the deck sent for duel *n*, written at each successful submit.
-- **`replay-<k>.yrp`.** The `STOC_REPLAY` payload bytes exactly as received, numbered in arrival order from 1. The server sends one per duel; the seat keeps whatever arrives and requires no count. These files are not re-encoded.
+- **`replay-<k>.yrp`.** The `STOC_REPLAY` payload bytes exactly as received, numbered in arrival order from 1 (a failed write can leave a gap; a resumed seat numbers on from the highest). The server sends one per duel; the seat keeps whatever arrives and requires no count. These files are not re-encoded.
 - **`session.bin`.** Written only when `YGO_CAPTURE=1`. Each received packet is stored as a record: `u32le` milliseconds since connect, `u16le` length, then the full packet bytes including the 2-byte length and 1-byte STOC id. It is the fixture format for `test/fixtures/sessions/`.
 - **Write failures.** An error event plus a log line; play continues.
 - **Retention.** Left to the operator. `runs/` is gitignored.
+
+## Rejoin
+
+Resume first: a lost connection or a damaged seat state never gives a match up by itself. The seat comes back through srvpro's reconnect, which holds a dropped player's duel and lets the same player back in.
+
+- **Triggers.** The server closing the socket, a socket error, or a server packet the seat could not read or handle (`unreadable` event). A failed packet can leave the board or the pending prompt stale, so the seat drops its connection and reloads the server's copy. Faults rejoin at most twice per duel; after that the seat reports them and plays on with what it has.
+- **Before the first duel** (srvpro's lobby stage) srvpro does not hold the seat. The rejoin is a fresh join that sends the deck and `READY` again; after a refused deck it waits for the model's submit.
+- **After the first duel started**, the rejoin sends `PLAYER_INFO` and `JOIN_GAME` with the same name and room, then `UPDATE_DECK` with the deck last sent before the first duel (srvpro compares those bytes). It never sends `READY` (during siding that would mark the side deck submitted). srvpro then sends `DUEL_START` and, by stage: `SELECT_HAND`, `SELECT_TP`, `CHANGE_SIDE`, or mid-duel an `MSG_START` with empty decks, `MSG_NEW_TURN`, `MSG_NEW_PHASE`, `MSG_RELOAD_FIELD`, `MSG_UPDATE_DATA` per location, and the pending hint and prompt (verified on 2339, fixtures `rejoin-a-*.bin`).
+  - That `MSG_START` continues the duel in progress: no duel is counted and the turn count is kept, because the server does not resend it. If the seat saw the last duel end, it is the next duel, which started while the seat was away.
+  - The pending prompt is cleared at the drop and comes back as a new prompt `seq`.
+- **Attempts.** Backoff 1, 2, 4, 8, 16, 16 s, each with jitter in [0.5, 1.5): about 47 s, inside srvpro's default 90 s hold (2339 held a dropped seat for 298 s on 2026-10-08). At most 10 rejoins per match. A failed attempt counts once, and one retry is pending at a time. An attempt that joins after the first duel waits up to 15 s for the restore; if its connection closes first, that wait ends and the next attempt starts its own.
+- **Refusals end the match record.** A version error is not a refusal (Compatibility, YGOPro version). Seated as an observer (srvpro no longer holds the seat), or a deck error (the deck differs) → `disconnected` with that reason and an `aborted` line. So does running out of attempts. A fault alone never records a duel or match result.
+- **A restarted seat** (the agent or its process stopped) resumes from its run folder when started with the same `YGO_ROOM`, `YGO_NAME` and `YGO_RUN_DIR` within srvpro's hold (about 5 minutes on 2339). Its deck prompt says so. Its submit restores the duel results, score, recorded decks and replay count, then rejoins as above with `duel-1.ydk`, whatever deck the new process was given; the working deck becomes the last one recorded. The duel number and turn count come from `seat.json`. If the server no longer restores the match within 15 s of the rejoin (for example it already forfeited the seat, or made a new room of that name), the rejoin is refused.
+- **Stopping.** A seat that stops during a started match (stdin closed, `SIGTERM`, `SIGINT`) does not send `LEAVE_GAME`, which would forfeit; it writes an `interrupted` line and closes the socket. srvpro forfeits the seat only if nobody rejoins within its hold. Before the first duel and after the match the seat leaves normally.
+- **Limits.** A duel that ends while the seat is away (the opponent surrendered) is not seen; srvpro resends no `MSG_WIN`. The seat plays on and records that duel as `unknown` once the server shows it is over: a `CHANGE_SIDE`, a new duel's `MSG_START` or `DUEL_END` while it is still in progress. The match result is then `unknown` unless the known duels decide it. The seat does not guess the result: srvpro keeps scores to itself, and the next first-player choice (the loser's, alternating after a draw) tells a win from a draw only if the seat also knows who chose for the missed duel, which a restarted seat does not. A match-winning effect announced while away is lost the same way. When a dropped player never returns, 2339 closed the other player's socket after the hold with no `MSG_WIN`; that seat's rejoin then finds no match and records `aborted`, not a win.
 
 ## MCP Tools
 
@@ -124,7 +150,7 @@ Rules shared by all tools:
   - The seat logs each result's size.
 - **Errors.**
   - Argument shape errors are rejected by the schema.
-  - Seat-state errors return `isError: true` with one sentence and a `next` hint. The cases are: no pending prompt, an answer field that does not fit the prompt kind, an option number out of range, an unknown card name in a deck edit, chat while not connected, or a tool called after `disconnected`.
+  - Seat-state errors return `isError: true` with one sentence and a `next` hint. The cases are: no pending prompt, an answer field that does not fit the prompt kind, an option number out of range, an unknown card name in a deck edit, chat while not connected, an answer, chat or surrender while the seat is rejoining, or a tool called after `disconnected`.
   - Server rejections are never tool errors. They come back as the next prompt with `rejected`.
 - **Annotations.** `deck_show`, `card` and `card_search` declare `readOnlyHint: true`; the other tools declare none. Approval is configured in the runtime (architecture Operations), not inferred from hints.
 - **Concurrency.** At most one blocking call (`wait`, `answer`, `surrender`) runs at a time per seat. A second one returns an `isError` that says a call is already waiting. `deck_show`, `deck_edit`, `card`, `card_search` and `chat` can run at any time, including while a `wait` is blocked.
@@ -169,7 +195,7 @@ Rules shared by all tools:
   - `import` replaces the deck and accepts YDK text, a `ydke://` URL or a KoishiPro deck code.
   - A name must resolve to exactly one catalog card (case-insensitive exact name, then a unique prefix). Otherwise the call is an error that lists up to 5 suggestions.
   - `add` without a section puts Fusion/Synchro/Xyz/Link cards in extra and everything else in main.
-  - Edits are allowed in any phase; only the submitted deck matters.
+  - Edits are allowed in any phase; only the submitted deck matters. A join, including a rejoin before the first duel, sends the deck last submitted, never later edits.
 - **Result:** DeckView.
 
 ### `card`
@@ -187,9 +213,9 @@ Rules shared by all tools:
 
 ### `chat`
 
-- **Input:** `{text: string}`, 1–255 characters.
+- **Input:** `{text: string}`, 1–255 characters, the protocol's limit. 2339 drops a line over 100 UTF-16 units (srvpro's spam check) and answers the sender with a server warning, which arrives as a chat event; 100 ASCII characters reached the opponent and 101 did not (2026-10-08).
 - **Behavior:** sends `CTOS_CHAT` as given. A line starting with `/` is a srvpro command and is not shown to the opponent. Calling it before the seat connects is an error.
-- **Result:** the line as sent, plus any new chat events.
+- **Result:** the line as sent to the server (not proof that the opponent got it) and the number of undelivered events. Chat events, including replies, arrive through `wait`, so each is delivered exactly once.
 
 ### `surrender`
 
@@ -201,11 +227,11 @@ Rules shared by all tools:
 
 - **SeatView.**
   - `phase`, `room`, `you: {name, host}`, `opponent: string | null`.
-  - `match: {duel, score: {me, opponent, draws}}`.
+  - `match: {duel, score: {me, opponent, draws, unknown?}}`.
   - `board: BoardView | null` (null means unchanged), `boardVersion`.
   - `events: EventView[]`: every event after the cursor.
   - `prompt: PromptView | null`.
-  - `waiting`: `opponent | server | null`.
+  - `waiting`: `opponent | server | rejoin | null`.
   - `disconnected`: a reason or null.
   - `next`: one imperative sentence telling the model what to call.
 - **BoardView.**
@@ -220,7 +246,7 @@ Rules shared by all tools:
   - `grave` and `banished`: `CardRefView[]`.
 - **CardRefView.**
   - `name` (or `"face-down card"`), `code` (absent when unknown), `position`.
-  - Optional: `atk`, `def`, `level` / `rank` / `link`, `counters`, `materials` (names), `equippedTo`, `negated`.
+  - Optional: `types` (kind first, then type words), `attribute`, `race`, `atk`, `def`, `level` / `rank` / `link`, `counters`, `materials` (names), `equippedTo`, `targets` (zone labels), `scales: {left, right}`, `negated`. These are the server's current values, which effects can change from the printed card; Extra Deck and banished cards keep their face-up/face-down position. The text form shows a monster's in its card's order: `Dark Zombie/Effect`. List lines (hand, GY, banished, Extra) bracket each card like zone slots.
 - **PromptView.**
   - `seq`, `kind`, `text`, `options: {n, label, tributes?, values?, counters?}[]`.
   - Optional, kind-dependent: `min`, `max`, `sumTarget`, `sumMode` (`exactly` | `at least`), `mustInclude` (`{label, values}[]`), `total`, `cancelable`, `finishable`, `rejected`.
@@ -250,15 +276,17 @@ The `kind` values are closed. Each row gives the answer field, what the server a
 | `tribute` | `SELECT_TRIBUTE` | `choose` at most `max` cards whose `tributes` add up to at least `min`, or `cancel` if cancelable | every card counts as 1 tribute, `min` = `max` = number of cards, not cancelable |
 | `unselect` | `SELECT_UNSELECT_CARD` | `choose` 1, or `finish` / `cancel` when allowed | never |
 | `sum` | `SELECT_SUM` | `choose` the non-mandatory cards; each card, mandatory ones included, counts as one of its `values`. `exactly`: `min`..`max` chosen cards whose total can equal `sumTarget`. `at least`: the total reaches `sumTarget` with no spare card. Mandatory cards are in `mustInclude` | never |
-| `sort` | `SORT_CARD` | `choose` all options in the new order, or `cancel` to keep the order | one card |
+| `sort` | `SORT_CARD` | `choose` all options in the new order, or `cancel` to keep the order; the seat sends each card's new position, as ocgcore reads it | one card |
 | `counter` | `SELECT_COUNTER` | `counts` adding up to `total`, each at most that card's `counters` | one card |
-| `place` | `SELECT_PLACE`, `SELECT_DISFIELD` | `choose` `min` zones | exactly `min` zones available |
+| `place` | `SELECT_PLACE`, `SELECT_DISFIELD` | `choose` `min` zones. A server count of 0 (setting a Spell/Trap) means 1 zone or `cancel`; the seat sends a cancel as `[player, 0, 0]` | exactly `min` zones available, not cancelable |
 | `position` | `SELECT_POSITION` | `choose` 1 | one position |
 | `race`, `attribute` | `ANNOUNCE_RACE`, `ANNOUNCE_ATTRIB` | `choose` exactly `min` | available = `min` |
 | `number` | `ANNOUNCE_NUMBER` | `choose` 1 | one number |
 | `declare` | `ANNOUNCE_CARD` | `card` (code or exact name); the server checks it | never |
 
 For `tribute`, `min` is a tribute total and `max` a card count. A card worth two tributes can make several answers legal, so a tribute is answered automatically only when every card counts as one. `sumMode` is `exactly` when the message's mode is 0 and `at least` when it is 1.
+
+`choose: []` submits zero cards for card, tribute and sum selections. It is distinct from cancellation; the server decides whether the empty selection is legal, including a sum met by mandatory cards alone.
 
 Every automatic answer appends an `auto` event naming what was chosen. The seat also answers `STOC_TIME_LIMIT` with `CTOS_TIME_CONFIRM` and, as host, sends `HS_START`; neither produces an event.
 
@@ -285,12 +313,13 @@ Every automatic answer appends an `auto` event naming what was chosen. The seat 
 ## CLI
 
 - `npm run seat`: the MCP seat on stdio. Configured only by environment; no arguments.
-- `npm run smoke -- --room <flags#id> [--deck <ydk>] [--names <a>,<b>]`: a model-free plumbing check.
-  - Two seats submit the deck, take the first option at RPS and first player, send one chat line each, surrender at their first in-duel prompt and keep the deck at each side prompt.
-  - Exits 0 when both run folders hold a `match` line and one replay per duel played. Otherwise it exits 1 and prints what is missing.
+- `npm run smoke [-- --room <flags#id>] [--deck <ydk>] [--names <a>,<b>] [--restart]`: a model-free plumbing check. The room defaults to a fresh `M,TM0,NF#sm<8 hex>`, the deck to `decks/sample.ydk`.
+  - Two seats submit the deck, play fixed rock-paper-scissors hands, go first when asked, send one chat line each, surrender at their first in-duel prompt and keep the deck at each side prompt.
+  - With `--restart`, seat b's process (it wins rock-paper-scissors, so it gets the duel prompts) is killed with `SIGKILL` at its first duel prompt; a new process must offer the resume, rejoin and finish the match.
+  - Exits 0 when both seats reached `ended`, each heard the other's chat line, a requested restart happened, and both run folders hold a `match` line, one replay per duel played and the deck of each duel. Otherwise it exits 1 and prints what is missing.
 - `npm run cards`: refreshes `YGO_CARDS_DIR`. Exits 0 when every source was fetched or was already current, and 1 on any failure, in which case existing files are kept.
-- `npm run probe`: one lobby join; prints JSON; leaves.
-- `npm test`: `node --test test`, offline.
+- `npm run probe` (also `npm start`): one lobby join; prints JSON; leaves.
+- `npm test`: `node --test "test/**/*.test.js"`, offline.
 
 ## Configuration
 
@@ -328,7 +357,8 @@ zh-CN/cards.cdb, zh-CN/strings.conf
 - **Merge order.** The catalog merges cards lowest priority first, so later rows replace earlier ones: zh-CN, super-pre (release then update), super-pre-en, en-US. A code is described by the highest-priority source that has it.
 - **Strings.** `strings.conf` files merge the same way. `test-strings.conf` only adds setnames and counters.
 - **Missing files.** A missing en-US set is fatal at seat start. Any other missing set is logged and skipped.
-- **Failed refresh.** Each file is downloaded to a temporary name and renamed into place only after the whole set for that source arrives. On failure the previous files stay.
+- **Failed refresh.** Each file is downloaded with a 5-minute timeout and up to three attempts with jittered backoff (server errors only), staged under a temporary name, and renamed into place only after the whole set for that source arrives. A file must also look like what it claims to be: a `.cdb` starts with the SQLite header, a strings file has `!` entries, and nothing is over 64 MiB, counted as the bytes arrive so a body with no length cannot grow past it. That way an error page or captive portal answering 200 cannot replace good data. On failure the previous files stay. At seat start, an unreadable optional database is logged and skipped; an unreadable en-US one stops the seat and names `npm run cards`. Behind an HTTP proxy, run with `NODE_USE_ENV_PROXY=1`.
+- **First-edition packs.** Optional `first-edition/*.ypk` files are placed by the operator and never downloaded. Every CDB inside a pack replaces the `text` and the non-empty effect strings of its cards, and those cards report `source: first-edition`. A pack that cannot be read is logged and skipped.
 
 ## Compatibility
 
@@ -336,7 +366,7 @@ zh-CN/cards.cdb, zh-CN/strings.conf
 - **Tool names and input fields** are stable. New inputs must be optional. Removing or renaming one is a breaking change and needs a concept or contract update.
 - **JSON DTOs and `results.jsonl`** only gain fields; consumers ignore unknown fields.
 - **Text output** may change at any time.
-- **YGOPro version.** The version starts at `YGO_VERSION`. One `VERERROR` retry adopts the server's version and logs it.
+- **YGOPro version.** The version starts at `YGO_VERSION`. One `VERERROR` retry per seat process adopts the server's version and logs it; a restarted seat's rejoin gets it too, because 2339 checks the version before it looks for the held seat.
 
 ## Examples
 
@@ -359,7 +389,7 @@ Opponent: hand 4 · deck 31 · extra 15 · GY 2 · banished 0
   S: [face-down] [-] [-] [-] [-] · Field: -
 You: hand 5 · deck 30 · extra 15 · GY 1 · banished 0
   M: [-] [-] [-] [-] [-] · S: [-] [-] [-] [-] [-] · Field: -
-  Hand: Elemental HERO Stratos, Pot of Desires, Infinite Impermanence, Polymerization, Mirror Force
+  Hand: [Elemental HERO Stratos 1800/300, Wind Warrior/Effect, Level 4] [Pot of Desires] [Infinite Impermanence] [Polymerization] [Mirror Force]
 Events: #41 Opponent Special Summoned Ash Blossom & Joyous Spring to M2 · #42 Opponent's turn ends · #43 Turn 3 (you): you drew Mirror Force
 Prompt 7 · command
  1) Normal Summon Elemental HERO Stratos (hand)

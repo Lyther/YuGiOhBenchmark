@@ -8,14 +8,14 @@ import {
   YGOProStocErrorMsg,
 } from "ygopro-msg-encode";
 
+import { describeMessage } from "../../src/bin/probe.js";
+import { PacketFramer } from "../../src/protocol/framing.js";
 import {
-  PacketFramer,
-  describeMessage,
   encodeJoinGame,
   encodePlayerInfo,
   parseServerPacket,
   rejectedVersion,
-} from "../../src/protocol/index.js";
+} from "../../src/protocol/packets.js";
 
 test("player and join packets round-trip through the codec", () => {
   const player = new YGOProCtosPlayerInfo();
@@ -55,7 +55,7 @@ test("version mismatch exposes the server version", () => {
   const error = new YGOProStocErrorMsg();
   error.msg = ErrorMessageType.VERERROR;
   error.code = 0x1351;
-  const parsed = parseServerPacket(Buffer.from(error.toFullPayload()));
+  const { message: parsed } = parseServerPacket(Buffer.from(error.toFullPayload()));
   assert.equal(rejectedVersion(parsed), 0x1351);
   assert.deepEqual(describeMessage(parsed), {
     type: "error",

@@ -76,7 +76,7 @@ async function setup(t, overrides = {}) {
   const connect = overrides.connect ? (options) => overrides.connect(options, link) : link.connect;
   const seat = createSeat({
     config, catalog, deck: DECK, record, connect, log,
-    replayGraceMs: overrides.replayGraceMs ?? 40, rejoinBaseMs: overrides.rejoinBaseMs ?? 1, random: () => 0.5,
+    replayGraceMs: overrides.replayGraceMs ?? 40, rejoinBaseMs: overrides.rejoinBaseMs ?? 1, random: overrides.random,
     restoreMs: overrides.restoreMs ?? 15_000, surrenderGraceMs: overrides.surrenderGraceMs,
   });
   // Closing flushes the run folder's queued writes before it is removed.
@@ -88,12 +88,31 @@ async function setup(t, overrides = {}) {
 }
 
 // A real TCP port that nothing listens on: a connect to it is refused.
+// Real timers throughout. Two rejoin tests wait fixed real times for each
+// backoff step; jitter in [0.5, 1.5) could stretch a step past its wait, so
+// those two hold it at its middle.
+const MIDDLE_JITTER = () => 0.5;
+
 async function closedPort() {
   const server = net.createServer().listen(0, "127.0.0.1");
   await once(server, "listening");
   const { port } = server.address();
   await new Promise((resolve) => server.close(resolve));
   return port;
+}
+
+// A real TCP server that counts the connections it is offered, reached through
+// the real connection code: a check that nothing is sent needs no double.
+async function countingServer(t) {
+  let offered = 0;
+  const server = net.createServer((socket) => {
+    offered += 1;
+    socket.destroy();
+  }).listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const { port } = server.address();
+  return { connect: (options) => openConnection({ ...options, host: "127.0.0.1", port }), offered: () => offered };
 }
 
 const types = (packets) => packets.map((packet) => packet.constructor);
@@ -129,7 +148,8 @@ function idle(player = 0) {
 }
 
 test("before any submit the seat holds the deck prompt and opens no socket", async (t) => {
-  const { seat, link } = await setup(t);
+  const server = await countingServer(t);
+  const { seat } = await setup(t, { connect: server.connect });
   const view = seat.snapshot();
   assert.equal(view.phase, "deck");
   assert.equal(view.prompt.kind, "deck");
@@ -138,7 +158,7 @@ test("before any submit the seat holds the deck prompt and opens no socket", asy
   assert.throws(() => seat.chat("hello"), SeatError);
   assert.equal(await seat.wait(), "prompt");
   assert.equal(seat.snapshot().prompt.seq, 1);
-  assert.equal(link.connects.length, 0);
+  assert.equal(server.offered(), 0);
 });
 
 test("submitting joins with one version retry, readies the deck and lets the host start", async (t) => {
@@ -446,16 +466,18 @@ test("an opponent name with Unicode line separators is kept on one line", async 
 });
 
 test("a submit into an existing run folder is refused before anything is sent", async (t) => {
-  const { seat, link, folder } = await setup(t);
+  const server = await countingServer(t);
+  const { seat, folder } = await setup(t, { connect: server.connect });
   await mkdir(folder, { recursive: true });
   await assert.rejects(seat.answer({ submit: true }), (error) => error instanceof SeatError && /already exists/.test(error.message));
-  assert.equal(link.connects.length, 0);
+  await delay(50);
+  assert.equal(server.offered(), 0);
   assert.equal(seat.snapshot().phase, "deck");
   assert.equal(seat.snapshot().prompt.kind, "deck", "the deck prompt stays open");
 });
 
 test("a lost connection is rejoined with backoff; only when every attempt fails is the match aborted", async (t) => {
-  const { seat, link, folder } = await setup(t, { rejoinBaseMs: 1 });
+  const { seat, link, folder } = await setup(t, { rejoinBaseMs: 1, random: MIDDLE_JITTER });
   await joinRoom(seat, link);
   await startDuel(seat, link);
   link.take();
@@ -636,7 +658,7 @@ test("a rejoin the server refuses (seated as an observer, or a different deck) i
 test("a rejoin dropped before its restore leaves no deadline to abort the next one", async (t) => {
   // The next attempt connects before the dropped one's 30 ms deadline, or after it.
   for (const rejoinBaseMs of [1, 40]) {
-    const { seat, link } = await setup(t, { restoreMs: 30, rejoinBaseMs });
+    const { seat, link } = await setup(t, { restoreMs: 30, rejoinBaseMs, random: MIDDLE_JITTER });
     await joinRoom(seat, link);
     await startDuel(seat, link);
     link.serverClose();
@@ -664,7 +686,7 @@ async function restart(t, folder) {
   const record = createRecorder({ runDir: dirname(dirname(folder)), room: ROOM, name: NAME });
   const seat = createSeat({
     config: { host: "koishi.example", port: 2339, name: NAME, room: ROOM, version: 0x1362, waitMs: 2000 },
-    catalog, deck: { main: [BLUE_EYES], extra: [], side: [] }, record, connect: link.connect, log, rejoinBaseMs: 1, random: () => 0.5,
+    catalog, deck: { main: [BLUE_EYES], extra: [], side: [] }, record, connect: link.connect, log, rejoinBaseMs: 1,
   });
   t.after(() => seat.close());
   return { seat, link, state };

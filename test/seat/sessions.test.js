@@ -130,7 +130,7 @@ test("replaying a live rejoin: the seat comes back mid-duel and while siding, an
   const record = createRecorder({ runDir, room, name: "rc-a-733d" });
   const seat = createSeat({
     config: { host: "koishi.momobako.com", port: 2339, name: "rc-a-733d", room, version: 0x1362, waitMs: 2000 },
-    catalog, deck, record, connect: link.connect, log: createLogger("silent"), rejoinBaseMs: 1, random: () => 0.5,
+    catalog, deck, record, connect: link.connect, log: createLogger("silent"), rejoinBaseMs: 1,
   });
   const kinds = () => link.take().map((packet) => packet.constructor.name);
   await feed(seat, link, "rejoin-a-1", { duel: "hold" });

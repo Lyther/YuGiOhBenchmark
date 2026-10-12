@@ -69,6 +69,7 @@ All entities live in one seat process and die with it, except the run-folder fil
   - Invariant: a zone's contents equal the server's latest `UPDATE_DATA` for that zone, with later deltas applied. Owner: `board.js`; proof: `board.test.js`.
 - **CardState.**
   - `code` (0 = unknown to this player), `position` (`faceup-attack | facedown-attack | faceup-defense | facedown-defense | faceup | facedown`).
+  - As in the stock client, a code the player has seen stays through a move whose code the server hides, unless the card goes into the Extra Deck, and a shuffle resets it. Deck cards are only counted, so one seen on top of the Deck is unknown once it leaves face-down (a TODO in `board.js`).
   - Optional: `attack`, `defense`, `level`, `rank`, `link`, `counters: {name, count}[]`, `overlays: code[]`, `equippedTo: ZoneRef`, `targets: ZoneRef[]`, `negated: boolean`, `scales: {left, right}`.
   - A **ZoneRef** is `{side: me | opponent, zone: hand | monster | spell | deck | extra | grave | banished, index}`.
 - **Prompt** (owner `game/prompts/*`). It is immutable after `build`.

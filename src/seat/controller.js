@@ -586,8 +586,11 @@ class Seat {
     }
     this.#rejoins += 1;
     this.#rejoin = { reason, attempts: 0 };
-    // srvpro resends a started match's pending prompt; the deck prompt is ours.
+    // srvpro resends a started match's pending prompt, a surrender's held one
+    // included; the deck prompt is ours.
     if (this.#started) this.#state.prompt = null;
+    clearTimeout(this.#held?.timer);
+    this.#held = null;
     this.#ready = [false, false];
     this.#startSent = false;
     this.#state.waiting = "rejoin";

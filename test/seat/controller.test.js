@@ -1041,3 +1041,20 @@ test("a surrender the server accepts gives nothing back after the grace", async 
   link.deliver(stocPacket(YGOProStocChangeSide));
   assert.equal(await surrendered, "prompt");
 });
+
+test("a rejoin drops a surrender's held prompt: the restore resends the pending one", async (t) => {
+  const { seat, link } = await idlePrompt(t);
+  const held = seat.snapshot().prompt;
+  const surrendered = seat.surrender();
+  await tick();
+  link.serverClose();
+  // The grace ends while the seat is still rejoining.
+  await delay(100);
+  assert.equal(seat.snapshot().waiting, "rejoin");
+  assert.equal(seat.snapshot().prompt, null, "nothing to answer while rejoining");
+  assert.ok(seat.snapshot().events.every((event) => !/did not accept/.test(event.text)));
+  rejoinMidDuel(link, { lp: 8000, deck: 35 });
+  link.deliver(idle(0));
+  assert.equal(await surrendered, "prompt");
+  assert.notEqual(seat.snapshot().prompt.seq, held.seq, "the server's copy of the prompt");
+});

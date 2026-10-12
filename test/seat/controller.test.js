@@ -77,7 +77,7 @@ async function setup(t, overrides = {}) {
   const seat = createSeat({
     config, catalog, deck: DECK, record, connect, log,
     replayGraceMs: overrides.replayGraceMs ?? 40, rejoinBaseMs: overrides.rejoinBaseMs ?? 1, random: () => 0.5,
-    restoreMs: overrides.restoreMs ?? 15_000,
+    restoreMs: overrides.restoreMs ?? 15_000, surrenderGraceMs: overrides.surrenderGraceMs,
   });
   // Closing flushes the run folder's queued writes before it is removed.
   t.after(async () => {
@@ -908,6 +908,45 @@ test("one blocking call at a time; surrender only in a duel", async (t) => {
   await tick();
   assert.deepEqual(types(link.take()), [YGOProCtosSurrender]);
   link.deliver(gamePacket(YGOProMsgWin, { player: 1, type: 0 }));
+  link.deliver(stocPacket(YGOProStocChangeSide));
+  assert.equal(await surrendered, "prompt");
+});
+
+async function idlePrompt(t) {
+  const { seat, link } = await setup(t, { surrenderGraceMs: 30 });
+  await joinRoom(seat, link);
+  const rps = seat.answer({ choose: [1] });
+  await tick();
+  await startDuel(seat, link);
+  link.deliver(idle(0));
+  assert.equal(await rps, "prompt");
+  link.take();
+  return { seat, link };
+}
+
+// srvpro can refuse a surrender: a chat line, and the surrender is never
+// passed on (ctos_follow 'SURRENDER'), so the duel still waits on the prompt.
+test("a surrender the server does not accept gives the pending prompt back", async (t) => {
+  const { seat, link } = await idlePrompt(t);
+  const held = seat.snapshot().prompt;
+  // Node 22 cancels a test whose only pending timers are the seat's unref'd ones.
+  const [reason] = await Promise.all([seat.surrender(), delay(200)]);
+  assert.equal(reason, "prompt");
+  assert.equal(seat.snapshot().prompt.seq, held.seq);
+  assert.match(lastEvent(seat).text, /did not accept the surrender/);
+  seat.answer({ choose: [1] });
+  await tick();
+  assert.deepEqual(types(link.take()), [YGOProCtosSurrender, YGOProCtosResponse], "the prompt can still be answered");
+});
+
+test("a surrender the server accepts gives nothing back after the grace", async (t) => {
+  const { seat, link } = await idlePrompt(t);
+  const surrendered = seat.surrender();
+  await tick();
+  link.deliver(gamePacket(YGOProMsgWin, { player: 1, type: 0 }));
+  await delay(100);
+  assert.equal(seat.snapshot().prompt, null, "the lost duel's prompt stays gone");
+  assert.ok(seat.snapshot().events.every((event) => !/did not accept/.test(event.text)));
   link.deliver(stocPacket(YGOProStocChangeSide));
   assert.equal(await surrendered, "prompt");
 });

@@ -220,7 +220,7 @@ Rules shared by all tools:
 ### `surrender`
 
 - **Input:** `{}`.
-- **Behavior:** sends `CTOS_SURRENDER` for the current duel. Allowed only in the `duel` phase.
+- **Behavior:** sends `CTOS_SURRENDER` for the current duel. Allowed only in the `duel` phase. srvpro can refuse a surrender: it is then never passed on, and the duel still waits on the pending prompt. So the seat holds that prompt back, and if the duel has not ended 10 s later it adds an event that the surrender was not accepted and gives the prompt back.
 - **Result:** SeatView after the server's reaction (same wait rules as `answer`).
 
 ## DTOs

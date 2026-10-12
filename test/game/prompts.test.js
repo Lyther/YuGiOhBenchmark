@@ -137,6 +137,28 @@ test("battle commands show attackers, direct attacks, Main Phase 2 and the end o
   assert.deepEqual(bytes(built, { choose: [5] }), [3, 0, 0, 0]);
 });
 
+// ocgcore processor.cpp: a monster that must attack and still can takes away
+// Main Phase 2 and the End Phase in battle, and the End Phase in Main Phase 1.
+test("a monster that must attack leaves only attacks in battle, and the prompt says why", () => {
+  const built = prompt(YGOProMsgSelectBattleCmd, {
+    player: 0, activatableCount: 0, activatableCards: [],
+    attackableCount: 1, attackableCards: [{ code: BLUE_EYES, ...where(0, MZONE, 2), directAttack: 1 }],
+    canM2: 0, canEp: 0,
+  });
+  assert.deepEqual(labels(built), ["Attack with Blue-Eyes White Dragon (your M3) (can attack directly)"]);
+  assert.match(built.prompt.text, /^Battle Phase: choose an action\. A monster must attack, so the Battle Phase cannot end yet\.$/);
+});
+
+test("Main Phase 1 has no End turn while the Battle Phase is required, and the prompt says why", () => {
+  const built = prompt(YGOProMsgSelectIdleCmd, {
+    player: 0, summonableCount: 0, summonableCards: [], spSummonableCount: 0, spSummonableCards: [], reposableCount: 0,
+    reposableCards: [], msetableCount: 0, msetableCards: [], ssetableCount: 0, ssetableCards: [], activatableCount: 0,
+    activatableCards: [], canBp: 1, canEp: 0, canShuffle: 0,
+  });
+  assert.deepEqual(labels(built), ["Go to Battle Phase"]);
+  assert.match(built.prompt.text, /: choose an action\. The turn cannot end before the Battle Phase\.$/);
+});
+
 test("chain windows: empty ones pass automatically, a single forced link is taken, otherwise Pass comes first", () => {
   const chain = (chains) => prompt(YGOProMsgSelectChain, { player: 0, count: chains.length, specialCount: 0, hint0: 0, hint1: 0, chains });
   const link = (code, forced = 0) => ({ edesc: 0, forced, code, ...where(0, HAND, 0), subsequence: 0, desc: 0 });

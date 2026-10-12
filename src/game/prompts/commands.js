@@ -36,7 +36,9 @@ function idle(message, context) {
   if (message.canEp) plain("End turn", IdleCmdType.TO_EP);
   if (message.canShuffle) plain("Shuffle your hand", IdleCmdType.SHUFFLE);
   const phase = context.board ? phaseLabel(context.board.phase) : "Main Phase";
-  return { prompt: { kind: "command", text: `${phase}: choose an action.`, options, source: message, refs }, auto: null };
+  // ocgcore takes the End Phase away in Main Phase 1 when a monster must attack.
+  const note = message.canBp && !message.canEp ? " The turn cannot end before the Battle Phase." : "";
+  return { prompt: { kind: "command", text: `${phase}: choose an action.${note}`, options, source: message, refs }, auto: null };
 }
 
 function battle(message, context) {
@@ -57,7 +59,9 @@ function battle(message, context) {
   };
   if (message.canM2) plain("Go to Main Phase 2", BattleCmdType.TO_M2);
   if (message.canEp) plain("End turn", BattleCmdType.TO_EP);
-  return { prompt: { kind: "battle", text: "Battle Phase: choose an action.", options, source: message, refs }, auto: null };
+  // In battle ocgcore takes the End Phase away only while a monster must attack.
+  const note = message.canEp ? "" : " A monster must attack, so the Battle Phase cannot end yet.";
+  return { prompt: { kind: "battle", text: `Battle Phase: choose an action.${note}`, options, source: message, refs }, auto: null };
 }
 
 function encodeCommand(prompt, answer) {

@@ -60,13 +60,18 @@ function unknownCard() {
   return { code: 0, position: C.POS_FACEDOWN };
 }
 
+// The server keeps Extra Deck cards face-down in defense position.
+function extraCard() {
+  return { code: 0, position: C.POS_FACEDOWN_DEFENSE };
+}
+
 function emptySide(info) {
   return {
     hand: [],
     monsters: Array(MONSTER_SLOTS).fill(null),
     spells: Array(SPELL_SLOTS).fill(null),
     deck: info.deckCount,
-    extra: Array.from({ length: info.extraCount }, unknownCard),
+    extra: Array.from({ length: info.extraCount }, extraCard),
     grave: [],
     banished: [],
   };
@@ -342,7 +347,7 @@ function reloadField(board, { players, chains }) {
     state.hand = Array.from({ length: info.handCount }, unknownCard);
     state.grave = Array.from({ length: info.graveCount }, unknownCard);
     state.banished = Array.from({ length: info.removedCount }, unknownCard);
-    state.extra = Array.from({ length: info.extraCount }, unknownCard);
+    state.extra = Array.from({ length: info.extraCount }, extraCard);
   });
   board.chain = chains.map((link) => ({
     card: zoneRef(board, { controller: link.chainCardController, location: link.chainCardLocation, sequence: link.chainCardSequence }),

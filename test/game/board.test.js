@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -30,9 +31,10 @@ import {
   YGOProMsgUnequip,
   YGOProMsgUpdateCard,
   YGOProMsgUpdateData,
+  YGOProStocGameMsg,
 } from "ygopro-msg-encode";
 
-import { applyBoard, cardAt, createBoard } from "../../src/game/board.js";
+import { applyBoard, cardAt, cardCode, createBoard } from "../../src/game/board.js";
 import { parseServerPacket } from "../../src/protocol/packets.js";
 import { fixtureCatalog } from "../helpers/fixture-catalog.js";
 import { gameMessage } from "../helpers/wire.js";
@@ -303,4 +305,65 @@ test("the reducer is pure: input boards are untouched and unrelated messages cha
   assert.equal(apply(next, YGOProMsgHint, { type: C.HINT_SELECTMSG, player: 0, desc: 500 }), next);
   assert.equal(cardAt(next, 0, HAND, 0).code, POT);
   assert.equal(cardAt(next, 1, MZONE, 0), null);
+});
+
+// Both seats of the first agent match, room M,TM0,NF#am866b8d5a on 2339
+// (fixtures/sessions/README.md): three duels, and the first player changes.
+async function capturedMessages(name) {
+  const bytes = await readFile(new URL(`../fixtures/sessions/${name}.bin`, import.meta.url));
+  const messages = [];
+  for (let offset = 0; offset < bytes.length;) {
+    const length = bytes.readUInt16LE(offset + 4);
+    const { message } = parseServerPacket(bytes.subarray(offset + 6, offset + 6 + length));
+    if (message instanceof YGOProStocGameMsg) messages.push(message.msg);
+    offset += 6 + length;
+  }
+  return messages;
+}
+
+const LISTS = { [HAND]: "hand", [GRAVE]: "grave", [C.LOCATION_REMOVED]: "banished", [C.LOCATION_EXTRA]: "extra" };
+const reported = (query) => (query?.queryLength ?? 0) > 4;
+
+function cardMismatch(mine, query) {
+  if (!reported(query)) return mine ? `the board has ${mine.code || "a card"}, the server none` : null;
+  if (!mine) return `the server has ${cardCode(query.code) || "a card"}, the board none`;
+  const code = query.code === undefined ? 0 : cardCode(query.code);
+  if (code && mine.code && code !== mine.code) return `code ${mine.code}, server ${code}`;
+  if (query.position !== undefined && query.position !== mine.position) return `position ${mine.position}, server ${query.position}`;
+  return null;
+}
+
+// An MSG_UPDATE_DATA is the server's own copy of one zone; it is checked
+// against the board before it is applied.
+function zoneMismatches(board, { player, location, cards }) {
+  const side = board.sides[player === board.me ? "me" : "opponent"];
+  if (location === DECK) return side.deck === cards.length ? [] : [`deck ${side.deck}, server ${cards.length}`];
+  if (!LISTS[location]) return cards.map((query, index) => cardMismatch(cardAt(board, player, location, index), query)).filter(Boolean);
+  const list = side[LISTS[location]];
+  const live = cards.filter(reported);
+  if (list.length !== live.length) return [`${LISTS[location]}: ${list.length} cards, server ${live.length}`];
+  return live.map((query, index) => cardMismatch(list[index], query)).filter(Boolean);
+}
+
+test("the board agrees with every zone the server reported in a real agent match", async () => {
+  const catalog = await fixtureCatalog();
+  for (const name of ["match-claude", "match-codex"]) {
+    let board = null;
+    let checks = 0;
+    const mismatches = [];
+    for (const msg of await capturedMessages(name)) {
+      if (msg instanceof YGOProMsgStart) {
+        board = createBoard({ duel: 1, start: msg });
+        continue;
+      }
+      if (!board) continue;
+      if (msg instanceof YGOProMsgUpdateData) {
+        checks += 1;
+        mismatches.push(...zoneMismatches(board, msg).map((text) => `turn ${board.turn}, location ${msg.location}: ${text}`));
+      }
+      board = applyBoard(board, msg, { catalog });
+    }
+    assert.ok(checks > 1000, `${name}: ${checks} zones checked`);
+    assert.deepEqual(mismatches, [], name);
+  }
 });

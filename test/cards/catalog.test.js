@@ -4,16 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import pino from "pino";
 import initSqlJs from "sql.js";
 import { CardDataEntry, YGOProCdb } from "ygopro-cdb-encode";
 
 import { loadCatalog } from "../../src/cards/catalog.js";
+import { createLogger } from "../../src/log.js";
 
-// The real logger, writing its lines to a list instead of stderr.
-function recordedLog() {
-  const lines = [];
-  return { log: pino({ level: "warn" }, { write: (line) => lines.push(JSON.parse(line)) }), lines };
+// The production logger, writing to a real file instead of stderr.
+async function fileLog(t) {
+  const dir = await mkdtemp(join(tmpdir(), "ygo-log-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const file = join(dir, "warnings.log");
+  const lines = async () => (await readFile(file, "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  return { log: createLogger("warn", file), lines };
 }
 
 const fixture = JSON.parse(await readFile(new URL("../fixtures/cards.json", import.meta.url), "utf8"));
@@ -158,10 +161,10 @@ test("a corrupt optional database is skipped with a warning; a corrupt en-US one
   const dir = await englishOnly(t);
   await mkdir(join(dir, "super-pre"), { recursive: true });
   await writeFile(join(dir, "super-pre/test-release.cdb"), "SQLite format 3\0 but truncated");
-  const { log, lines } = recordedLog();
+  const { log, lines } = await fileLog(t);
   const catalog = await loadCatalog(dir, { log });
   assert.ok(catalog.card(89631139), "en-US still loads");
-  assert.deepEqual(lines.filter((line) => /unreadable/.test(line.msg)).map((line) => [line.source, line.msg]), [["super-pre", "card data source unreadable; skipped"]]);
+  assert.deepEqual((await lines()).filter((line) => /unreadable/.test(line.msg)).map((line) => [line.source, line.msg]), [["super-pre", "card data source unreadable; skipped"]]);
   await writeFile(join(dir, "en-US/cards.cdb"), "<html>not a database</html>");
   await assert.rejects(loadCatalog(dir), /unreadable.*en-US.*npm run cards/);
 });
@@ -183,7 +186,7 @@ test("a first-edition pack overrides effect text and strings of its cards but ke
   await writeFile(join(dir, "first-edition/pack.ypk"), zipSync({ "2012.cdb": cdb.export(), "script/c89631139.lua": new Uint8Array([45, 45]) }));
   cdb.finalize();
   await writeFile(join(dir, "first-edition/broken.ypk"), "not a zip archive");
-  const { log, lines } = recordedLog();
+  const { log, lines } = await fileLog(t);
   const catalog = await loadCatalog(dir, { log });
   const card = catalog.card(89631139);
   assert.equal(card.name, "Blue-Eyes White Dragon");
@@ -196,5 +199,5 @@ test("a first-edition pack overrides effect text and strings of its cards but ke
   assert.equal(catalog.card(89631140).source, "en-US", "only the pack's own codes change");
   assert.deepEqual(catalog.counts, { "en-US": 14, "first-edition": 1 });
   assert.equal(catalog.size, 15);
-  assert.deepEqual(lines.filter((line) => line.pack).map((line) => [line.pack, line.msg]), [["broken.ypk", "card data pack unreadable; skipped"]]);
+  assert.deepEqual((await lines()).filter((line) => line.pack).map((line) => [line.pack, line.msg]), [["broken.ypk", "card data pack unreadable; skipped"]]);
 });

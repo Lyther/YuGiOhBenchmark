@@ -1,5 +1,6 @@
 import pino from "pino";
 
-export function createLogger(level = "info") {
-  return pino({ level }, pino.destination({ dest: 2, sync: true }));
+// stderr by default: stdout carries the MCP stream.
+export function createLogger(level = "info", dest = 2) {
+  return pino({ level }, pino.destination({ dest, sync: true }));
 }

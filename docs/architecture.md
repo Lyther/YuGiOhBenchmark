@@ -45,7 +45,7 @@ IDs come from the concept. `D-` items are derived from research done for this do
   Verification gate: the smoke run sends one line each way; `controller.test.js` tags captured server lines; the agents chat in Q-01.
 
 - `G-04` Goal: each match leaves the server's replays plus one result line per duel.
-  Evidence: concept G-04, E-07; srvpro sends match replays right after `DUEL_END` ([source](https://github.com/mycard/srvpro/blob/c16bbccddbd5f3304e6e1d93118db45e8868003f/ygopro-server.coffee#L3111-L3126)).
+  Evidence: concept G-04, E-07; srvpro sends match replays just before `DUEL_END` ([source](https://github.com/mycard/srvpro/blob/c16bbccddbd5f3304e6e1d93118db45e8868003f/ygopro-server.coffee#L3111-L3126)).
   Architecture impact: `seat/record.js` writes raw `STOC_REPLAY` payload bytes as `.yrp`, `results.jsonl` and the submitted `.ydk`. The controller reports the match over only once the replays are in (Runtime View, End), so the replays the server sent are saved before the model can end its session.
   Verification gate: Q-01 checks the files exist; the operator opens one replay in KoishiPro.
 
@@ -209,9 +209,9 @@ The shape is a layered single process with a pure core. All game understanding (
   Tool calls are separate async entry points. `wait` resolves when a prompt is pending, the phase changes to `ended` or `disconnected`, or an opponent chat line arrives, or else after `YGO_WAIT_MS`. `answer` sends the response, then behaves like `wait`.
 - **Between duels.** `STOC_CHANGE_SIDE` starts a `side` prompt. The submit sends `UPDATE_DECK`, and `SIDEERROR` returns to the side prompt. `STOC_SELECT_TP` goes to the loser of the previous duel.
 - **End.** `STOC_DUEL_END` ends the match, whether after two wins or earlier on a match kill (concept E-06); the seat counts no duels itself.
-  - srvpro sends the replays it held right after `DUEL_END` ([source](https://github.com/mycard/srvpro/blob/c16bbccddbd5f3304e6e1d93118db45e8868003f/ygopro-server.coffee#L3111-L3126)), and each one is written as it arrives.
+  - srvpro sends the replays it held just before `DUEL_END` ([source](https://github.com/mycard/srvpro/blob/c16bbccddbd5f3304e6e1d93118db45e8868003f/ygopro-server.coffee#L3111-L3126)), and each one is written as it arrives.
   - The phase becomes `ended` once the seat holds one replay per duel played, the server closes the connection, or 15 s pass, whichever comes first.
-  - So every replay the server sent is saved before any tool reports the match over, and an agent that stops at "match over" cannot cut them off. The wait is normally milliseconds. If the 15 s pass first, the folder lacks the replays that had not arrived: it holds fewer replay files than duel lines.
+  - So every replay the server sent is saved before any tool reports the match over, and an agent that stops at "match over" cannot cut them off. There is normally no wait: srvpro itself waits up to 5 s for the last replay before it sends them. If the 15 s pass first, the folder lacks the replays that had not arrived: it holds fewer replay files than duel lines.
 - **Shutdown.** The process lives until the runtime closes stdin or receives `SIGTERM`/`SIGINT`. It then closes the connection, flushes the log and exits 0. During a started match it does not send `LEAVE_GAME`, which would forfeit: it writes an `interrupted` line, and srvpro holds the seat for a restarted seat to resume (AD-14). Otherwise it sends `LEAVE_GAME` first.
 - **Failures.** A socket error, an unexpected close, or a server packet the seat cannot handle starts a rejoin (`waiting: rejoin`; contracts Rejoin). Only a refused or exhausted rejoin puts the seat in phase `disconnected` with a reason, which every tool reports.
 - **Other commands.**

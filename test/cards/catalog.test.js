@@ -8,6 +8,16 @@ import initSqlJs from "sql.js";
 import { CardDataEntry, YGOProCdb } from "ygopro-cdb-encode";
 
 import { loadCatalog } from "../../src/cards/catalog.js";
+import { createLogger } from "../../src/log.js";
+
+// The production logger, writing to a real file instead of stderr.
+async function fileLog(t) {
+  const dir = await mkdtemp(join(tmpdir(), "ygo-log-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const file = join(dir, "warnings.log");
+  const lines = async () => (await readFile(file, "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  return { log: createLogger("warn", file), lines };
+}
 
 const fixture = JSON.parse(await readFile(new URL("../fixtures/cards.json", import.meta.url), "utf8"));
 const SQL = await initSqlJs();
@@ -34,42 +44,6 @@ async function englishOnly(t) {
   await writeSet(dir, "en-US", { "cards.cdb": rows() }, "strings.conf", fixture.strings);
   return dir;
 }
-
-test("monster, spell and trap rows become cards with English vocabulary", async (t) => {
-  const catalog = await loadCatalog(await englishOnly(t));
-  const { text, strings, ...blueEyes } = catalog.card(89631139);
-  assert.deepEqual(blueEyes, {
-    code: 89631139, alias: 0, name: "Blue-Eyes White Dragon", kind: "monster", types: ["normal"],
-    attribute: "Light", race: "Dragon", level: 8, atk: 3000, def: 2500, setnames: ["Blue-Eyes"], source: "en-US",
-  });
-  assert.match(text, /legendary dragon/i);
-  assert.equal(strings.length, 16);
-  assert.equal(catalog.card(1861629).strings[0], "Stop that activation and destroy it");
-  const decode = catalog.card(1861629);
-  assert.equal(decode.link, 3);
-  assert.deepEqual(decode.linkMarkers, ["bottom-left", "bottom-right", "top"]);
-  assert.equal(decode.def, undefined, "a Link monster has no DEF");
-  assert.equal(decode.level, undefined);
-  assert.deepEqual(decode.types, ["effect", "link"]);
-  const utopia = catalog.card(84013237);
-  assert.equal(utopia.rank, 4);
-  assert.equal(utopia.level, undefined);
-  assert.deepEqual(utopia.setnames, ["Number", "Utopia"]);
-  const oddEyes = catalog.card(16178681);
-  assert.equal(oddEyes.level, 7);
-  assert.deepEqual(oddEyes.scales, { left: 4, right: 4 });
-  assert.deepEqual(oddEyes.types, ["effect", "pendulum"]);
-  assert.deepEqual(catalog.card(14558127).types, ["effect", "tuner"]);
-  assert.deepEqual(catalog.card(44508094).types, ["effect", "synchro"]);
-  assert.equal(catalog.card(10000).atk, -2, "unknown ATK keeps the CDB value -2");
-  assert.equal(catalog.card(55144522).kind, "spell");
-  assert.equal(catalog.card(44095762).kind, "trap");
-  assert.equal(catalog.card(89631140).alias, 89631139, "alternate art keeps its alias");
-  assert.equal(catalog.card(123), null);
-  assert.equal(catalog.isExtraDeck(44508094), true);
-  assert.equal(catalog.isExtraDeck(1861629), true);
-  assert.equal(catalog.isExtraDeck(16178681), false, "a main-deck Pendulum stays in main");
-});
 
 test("names resolve exactly, then by a unique prefix, else return suggestions", async (t) => {
   const catalog = await loadCatalog(await englishOnly(t));
@@ -100,18 +74,6 @@ test("search filters, orders by name then code, and pages without losing the tot
   assert.equal(page.offset, 3);
   assert.deepEqual(names(page), ["Dark Magician", "Decode Talker"]);
   assert.deepEqual(Object.keys(page.cards[0]).sort(), ["atk", "attribute", "code", "def", "kind", "level", "name", "race", "types"]);
-});
-
-test("descriptions resolve system strings and per-card effect strings", async (t) => {
-  const catalog = await loadCatalog(await englishOnly(t));
-  assert.equal(catalog.desc(95), "Use the effect of [%ls]?");
-  assert.equal(catalog.desc((1861629 << 4) | 0), "Stop that activation and destroy it");
-  assert.equal(catalog.desc((55144522 << 4) | 3), null, "an empty card string is unknown");
-  assert.equal(catalog.desc((123 << 4) | 1), null);
-  assert.equal(catalog.victoryReason(1), "LP reached 0");
-  assert.equal(catalog.counterName(1), "Spell Counter");
-  assert.equal(catalog.attributeName(0x20), "Dark");
-  assert.equal(catalog.raceName(0x1000000), "Cyberse");
 });
 
 test("layers merge zh-CN < super-pre < super-pre-en < en-US and name their source", async (t) => {
@@ -151,10 +113,10 @@ test("a corrupt optional database is skipped with a warning; a corrupt en-US one
   const dir = await englishOnly(t);
   await mkdir(join(dir, "super-pre"), { recursive: true });
   await writeFile(join(dir, "super-pre/test-release.cdb"), "SQLite format 3\0 but truncated");
-  const warnings = [];
-  const catalog = await loadCatalog(dir, { log: { warn: (fields, message) => warnings.push([fields.source, message]) } });
+  const { log, lines } = await fileLog(t);
+  const catalog = await loadCatalog(dir, { log });
   assert.ok(catalog.card(89631139), "en-US still loads");
-  assert.deepEqual(warnings.filter(([, message]) => /unreadable/.test(message)), [["super-pre", "card data source unreadable; skipped"]]);
+  assert.deepEqual((await lines()).filter((line) => /unreadable/.test(line.msg)).map((line) => [line.source, line.msg]), [["super-pre", "card data source unreadable; skipped"]]);
   await writeFile(join(dir, "en-US/cards.cdb"), "<html>not a database</html>");
   await assert.rejects(loadCatalog(dir), /unreadable.*en-US.*npm run cards/);
 });
@@ -176,8 +138,8 @@ test("a first-edition pack overrides effect text and strings of its cards but ke
   await writeFile(join(dir, "first-edition/pack.ypk"), zipSync({ "2012.cdb": cdb.export(), "script/c89631139.lua": new Uint8Array([45, 45]) }));
   cdb.finalize();
   await writeFile(join(dir, "first-edition/broken.ypk"), "not a zip archive");
-  const warnings = [];
-  const catalog = await loadCatalog(dir, { log: { warn: (fields, message) => warnings.push([fields.pack, message]) } });
+  const { log, lines } = await fileLog(t);
+  const catalog = await loadCatalog(dir, { log });
   const card = catalog.card(89631139);
   assert.equal(card.name, "Blue-Eyes White Dragon");
   assert.equal(card.text, firstText);
@@ -189,5 +151,5 @@ test("a first-edition pack overrides effect text and strings of its cards but ke
   assert.equal(catalog.card(89631140).source, "en-US", "only the pack's own codes change");
   assert.deepEqual(catalog.counts, { "en-US": 14, "first-edition": 1 });
   assert.equal(catalog.size, 15);
-  assert.deepEqual(warnings.filter(([pack]) => pack), [["broken.ypk", "card data pack unreadable; skipped"]]);
+  assert.deepEqual((await lines()).filter((line) => line.pack).map((line) => [line.pack, line.msg]), [["broken.ypk", "card data pack unreadable; skipped"]]);
 });

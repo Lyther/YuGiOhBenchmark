@@ -13,7 +13,8 @@
     "test": "node --test \"test/**/*.test.js\"",
     "cards": "node src/bin/cards.js",
     "seat": "node src/bin/seat.js",
-    "smoke": "node src/bin/smoke.js"
+    "smoke": "node src/bin/smoke.js",
+    "spec": "node --test spec/seat-entry.test.js spec/tools.test.js spec/catalog.test.js spec/deck.test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.3.1",

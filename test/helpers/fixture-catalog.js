@@ -8,16 +8,19 @@ import { CardDataEntry, YGOProCdb } from "ygopro-cdb-encode";
 import { loadCatalog } from "../../src/cards/catalog.js";
 
 // SUBSTITUTE_JUSTIFICATION
-// - substitute: cards.json via writeFixtureCards/fixtureCatalog; used by the
-//   catalog, deck, game, controller, view, render and MCP tool diagnostics.
+// - substitute: cards.json, through writeFixtureCards/fixtureCatalog and the
+//   rows catalog.test.js writes itself.
 // - replaces: the downloaded card pool and its text (codes/stats are retained;
 //   effect text is authored test text, not a claim about an actual card).
-// - necessity: exact ambiguity, precedence, missing-source and text-mapping
-//   assertions require controlled rows; the live mutable sources cannot be
-//   made to hold those rows or failure states. The real CDB writer/loader runs.
+// - necessity: catalog.test.js checks prefix and ambiguity resolution, search
+//   totals, layer merges, missing or corrupt sources and first-edition packs,
+//   and deck.test.js an ambiguous edit: each needs a row set or a failure that
+//   the live data cannot be made to hold. The game, seat, view and render tests
+//   check the exact model-facing text built from names and effect strings,
+//   which needs those strings fixed. The real CDB writer and loader run.
 // - proof-limit: no qualification of live card text, pool support or gameplay.
-// - real-proof: spec/seat-entry.test.js loads the downloaded catalog; npm run
-//   smoke exercises a real deck; full gameplay remains P1.11/P2.2.
+// - real-proof: npm run spec loads the downloaded catalog (entry point, tools,
+//   lookups, deck edits); npm run smoke and the 2026-10-12 agent match play it.
 export async function writeFixtureCards(dir) {
   const fixture = JSON.parse(await readFile(new URL("../fixtures/cards.json", import.meta.url), "utf8"));
   const texts = new Map(fixture.texts.map((text) => [text.id, text]));

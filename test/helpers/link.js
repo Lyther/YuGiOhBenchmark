@@ -3,15 +3,23 @@ import { YGOProCtos } from "ygopro-msg-encode";
 import { parseServerPacket } from "../../src/protocol/packets.js";
 
 // SUBSTITUTE_JUSTIFICATION
-// - substitute: createLink in controller.test.js and sessions.test.js.
+// - substitute: createLink in sessions.test.js and controller.test.js. The
+//   controller tests that need no controlled packets run over real TCP: the
+//   checks that nothing is sent, the one-call rule and a stop mid-match.
 // - replaces: the live network connection, including incoming packet timing.
-// - necessity: version offers, late/missing replays, closes and same-callback
-//   chat/match-end ordering need deterministic control. Neither hosted 2339
-//   nor a TCP peer guarantees those packet callback boundaries. Captured bytes
-//   also need an explicit driver to replay their original order.
-// - proof-limit: all uses, including ordinary lobby cases, are diagnostic;
-//   this is not proof of interoperability or server acceptance of responses.
-// - real-proof: npm run smoke; full agent gameplay remains P1.11/P2.2.
+// - necessity: every other controller test checks one of these, which 2339
+//   cannot be made to produce on demand: a server error or refusal (VERERROR,
+//   DECKERROR, SIDEERROR, MSG_RETRY, a refused rejoin or surrender); a rare
+//   server state (an observer seat, a forfeit, a match kill, a duel that ended
+//   while the seat was away, chat from an observer or the server); packets that
+//   must arrive in one callback or in a set order (chat with the match end,
+//   deck edits during a join); or a close or replay at a set time. Their lobby
+//   and duel steps only reach that state. Captured bytes need a driver that
+//   delivers them in their original order.
+// - proof-limit: every use is diagnostic; none proves interoperability or that
+//   the server accepts the seat's responses.
+// - real-proof: npm run smoke, and the 2026-10-12 agent match on 2339
+//   (docs/status.md).
 export function createLink() {
   const link = {
     connects: [],

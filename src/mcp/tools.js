@@ -190,7 +190,8 @@ function roomTools(seat) {
       return text(`Sent to the server: ${sent}\nUndelivered events: ${pending}; call wait to read them.`);
     }],
     ["surrender", {
-      description: "Surrender the current duel. Then waits like wait and returns the next view.",
+      description: "Surrender the current duel. Then waits like wait and returns the next view. If the server refuses the surrender, "
+        + "the pending prompt comes back after about 10 s.",
       inputSchema: z.object({ format }),
     }, async (args) => {
       await seat.surrender();

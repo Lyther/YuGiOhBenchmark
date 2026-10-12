@@ -60,13 +60,18 @@ function unknownCard() {
   return { code: 0, position: C.POS_FACEDOWN };
 }
 
+// The server keeps Extra Deck cards face-down in defense position.
+function extraCard() {
+  return { code: 0, position: C.POS_FACEDOWN_DEFENSE };
+}
+
 function emptySide(info) {
   return {
     hand: [],
     monsters: Array(MONSTER_SLOTS).fill(null),
     spells: Array(SPELL_SLOTS).fill(null),
     deck: info.deckCount,
-    extra: Array.from({ length: info.extraCount }, unknownCard),
+    extra: Array.from({ length: info.extraCount }, extraCard),
     grave: [],
     banished: [],
   };
@@ -158,7 +163,6 @@ function host(board, { controller, sequence }) {
 }
 
 function move(board, message) {
-  const code = cardCode(message.code);
   const from = message.previous;
   const to = message.current;
   let card = null;
@@ -169,6 +173,11 @@ function move(board, message) {
     card = take(board, from);
   }
   if (!to.location) return;
+  // Like the stock client (duelclient.cpp MSG_MOVE), a code the server hides
+  // keeps what the player saw, except into the Extra Deck; shuffles reset it.
+  // TODO: the stock client also tracks Deck cards seen on top (MSG_CONFIRM_DECKTOP)
+  // until a shuffle; the board counts the Deck only, so those leave it unknown.
+  const code = cardCode(message.code) || (to.location === C.LOCATION_EXTRA ? 0 : card?.code ?? 0);
   if (to.location & C.LOCATION_OVERLAY) {
     const xyz = host(board, to);
     if (xyz) (xyz.overlays ??= []).splice(to.position, 0, code);
@@ -184,10 +193,20 @@ function draw(board, { player, cards }) {
   for (const raw of cards) state.hand.push({ code: cardCode(raw), position: isPublic(raw) ? C.POS_FACEUP : C.POS_FACEDOWN });
 }
 
+// What queries say about a card beyond its code, position and links. The stock
+// client drops it when a query hides the card or names no code, and keeps the
+// rest (client_card.cpp UpdateInfo, ClearData).
+const QUERY_DATA = ["type", "attribute", "race", "attack", "defense", "level", "rank", "link", "scales", "counters", "negated"];
+
+function forgetData(card) {
+  for (const key of QUERY_DATA) delete card[key];
+}
+
 function mergeQuery(board, previous, query) {
   if (!query || (query.queryLength ?? 0) <= EMPTY_QUERY_LENGTH) return null;
-  if (!query.flags) return previous ?? unknownCard();
   const card = previous ? { ...previous } : unknownCard();
+  if (!query.flags || (query.code !== undefined && !cardCode(query.code))) forgetData(card);
+  if (!query.flags) return card;
   if (query.code !== undefined) card.code = cardCode(query.code);
   if (query.position !== undefined) card.position = query.position;
   // Current values, which effects can change from the printed card.
@@ -296,7 +315,10 @@ function shuffleExtra(board, { player, cards }) {
 function shuffleSetCards(board, { cards }) {
   const moved = cards.map(({ oldLocation }) => {
     const card = cardAt(board, oldLocation.controller, oldLocation.location, oldLocation.sequence);
-    if (card) card.code = 0;
+    if (card) {
+      card.code = 0;
+      forgetData(card);
+    }
     return card;
   });
   // A zero destination hides the permutation; the occupied slots stay put.
@@ -342,7 +364,7 @@ function reloadField(board, { players, chains }) {
     state.hand = Array.from({ length: info.handCount }, unknownCard);
     state.grave = Array.from({ length: info.graveCount }, unknownCard);
     state.banished = Array.from({ length: info.removedCount }, unknownCard);
-    state.extra = Array.from({ length: info.extraCount }, unknownCard);
+    state.extra = Array.from({ length: info.extraCount }, extraCard);
   });
   board.chain = chains.map((link) => ({
     card: zoneRef(board, { controller: link.chainCardController, location: link.chainCardLocation, sequence: link.chainCardSequence }),

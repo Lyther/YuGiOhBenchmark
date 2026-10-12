@@ -22,6 +22,16 @@ const catalog = await fixtureCatalog();
 const BLUE_EYES = 89631139;
 const UTOPIA = 84013237;
 
+// SUBSTITUTE_JUSTIFICATION
+// - substitute: the seat state built by state() and duelBoard(), from
+//   constructed messages the real board applies.
+// - replaces: the state a live duel leaves in the controller.
+// - necessity: each test checks one state-to-view rule (hidden opponent cards,
+//   the delivery cursor, a prompt and its answer help, a disconnect) at a state
+//   chosen for it; a live duel cannot be stopped at those states on demand.
+// - proof-limit: diagnostic of the mapping from state to view, not of a duel.
+// - real-proof: the views the agents read in the 2026-10-12 match, kept in
+//   their transcripts (docs/status.md).
 function duelBoard() {
   const start = gameMessage(YGOProMsgStart, {
     playerType: 1, duelRule: 5, startLp0: 8000, startLp1: 6000,

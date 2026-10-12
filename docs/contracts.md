@@ -18,7 +18,7 @@ Last updated: 2026-10-07
 
   There is no HTTP or RPC surface.
 - **Canonical sources.** The code now exists, so each fact has one source in code:
-  - tool inputs: the zod schemas in `src/mcp/tools.js`, with `test/mcp/tools.test.js` snapshotting `tools/list` so contract changes show up in review;
+  - tool inputs: the zod schemas in `src/mcp/tools.js`, with `spec/tools.test.js` snapshotting `tools/list` so contract changes show up in review;
   - DTO mapping: `src/seat/view.js`;
   - file formats: `src/seat/record.js`;
   - environment: `src/config.js`;
@@ -69,6 +69,7 @@ All entities live in one seat process and die with it, except the run-folder fil
   - Invariant: a zone's contents equal the server's latest `UPDATE_DATA` for that zone, with later deltas applied. Owner: `board.js`; proof: `board.test.js`.
 - **CardState.**
   - `code` (0 = unknown to this player), `position` (`faceup-attack | facedown-attack | faceup-defense | facedown-defense | faceup | facedown`).
+  - As in the stock client, a code the player has seen stays through a move whose code the server hides, unless the card goes into the Extra Deck, and a shuffle resets it. Deck cards are only counted, so one seen on top of the Deck is unknown once it leaves face-down (a TODO in `board.js`).
   - Optional: `attack`, `defense`, `level`, `rank`, `link`, `counters: {name, count}[]`, `overlays: code[]`, `equippedTo: ZoneRef`, `targets: ZoneRef[]`, `negated: boolean`, `scales: {left, right}`.
   - A **ZoneRef** is `{side: me | opponent, zone: hand | monster | spell | deck | extra | grave | banished, index}`.
 - **Prompt** (owner `game/prompts/*`). It is immutable after `build`.
@@ -220,7 +221,7 @@ Rules shared by all tools:
 ### `surrender`
 
 - **Input:** `{}`.
-- **Behavior:** sends `CTOS_SURRENDER` for the current duel. Allowed only in the `duel` phase.
+- **Behavior:** sends `CTOS_SURRENDER` for the current duel. Allowed only in the `duel` phase. srvpro can refuse a surrender: it is then never passed on, and the duel still waits on the pending prompt. So the seat holds that prompt back, and if the duel has not ended 10 s later it adds an event that the surrender was not accepted and gives the prompt back. A rejoin drops the held prompt instead: the restore resends whatever prompt is pending.
 - **Result:** SeatView after the server's reaction (same wait rules as `answer`).
 
 ## DTOs
@@ -347,7 +348,7 @@ An invalid value stops the process at start, with the variable named on stderr. 
 en-US/cards.cdb, en-US/strings.conf
     https://raw.githubusercontent.com/mycard/ygopro-database/master/locales/en-US/{cards.cdb,strings.conf}
 super-pre-en/test-release.cdb, super-pre-en/test-strings.conf
-    https://raw.githubusercontent.com/ElderLich/TransSuperpre/main/EN/Base%20Files/{test-release.cdb,test-strings.conf}
+    https://raw.githubusercontent.com/ElderLich/Pre-Release-Translations/main/EN/Base%20Files/{test-release.cdb,test-strings.conf}
 super-pre/test-release.cdb, super-pre/test-update.cdb, super-pre/test-strings.conf
     https://cdn02.moecube.com:444/ygopro-super-pre/data/{test-release.cdb,test-update.cdb,test-strings.conf}
 zh-CN/cards.cdb, zh-CN/strings.conf

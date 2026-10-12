@@ -6,6 +6,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import initSqlJs from "sql.js";
+import { CardDataEntry, YGOProCdb } from "ygopro-cdb-encode";
+
 import { CARD_SOURCES, refreshCards } from "../../src/cards/sources.js";
 
 // SUBSTITUTE_JUSTIFICATION: the real origins (GitHub raw, MyCard CDN) cannot be
@@ -46,9 +49,21 @@ async function tempDir(t) {
   return dir;
 }
 
-const noWait = { sleep: async () => { }, random: () => 0 };
-// Downloads are checked for the SQLite header before install.
-const cdb = (text) => `SQLite format 3\u0000${text}`;
+// Real timers, with the retry backoff cut to a 1 ms base.
+const QUICK = { baseDelayMs: 1 };
+const fixture = JSON.parse(await readFile(new URL("../fixtures/cards.json", import.meta.url), "utf8"));
+const SQL = await initSqlJs();
+
+// A real card database, written by the real writer; its one row is a fixture
+// card, and different rows give databases that differ.
+function cardDatabase(row = 0) {
+  const data = fixture.datas[row];
+  const cdb = new YGOProCdb(SQL);
+  cdb.addCard([new CardDataEntry().fromSqljsRow({ ...data, ...fixture.texts.find((entry) => entry.id === data.id) })]);
+  const bytes = Buffer.from(cdb.export());
+  cdb.finalize();
+  return bytes;
+}
 
 test("the canonical list names the four contract sources with en-US required", () => {
   assert.deepEqual(CARD_SOURCES.map((source) => source.name), ["en-US", "super-pre-en", "super-pre", "zh-CN"]);
@@ -59,86 +74,89 @@ test("the canonical list names the four contract sources with en-US required", (
 });
 
 test("a source is written whole, then reported current when unchanged", async (t) => {
-  const { base } = await origin(t, { "/a/cards.cdb": { body: cdb("cdb-bytes") }, "/a/strings.conf": { body: "!system 1 x" } });
+  const database = cardDatabase();
+  const { base } = await origin(t, { "/a/cards.cdb": { body: database }, "/a/strings.conf": { body: "!system 1 x" } });
   const dir = await tempDir(t);
   const sources = [{ name: "en-US", base: `${base}/a/`, files: ["cards.cdb", "strings.conf"], required: true }];
-  const first = await refreshCards(dir, { sources, ...noWait });
+  const first = await refreshCards(dir, { sources, ...QUICK });
   assert.deepEqual(first.map(({ name, status }) => ({ name, status })), [{ name: "en-US", status: "updated" }]);
-  assert.equal(await readFile(join(dir, "en-US/cards.cdb"), "utf8"), cdb("cdb-bytes"));
+  assert.deepEqual(await readFile(join(dir, "en-US/cards.cdb")), database);
   assert.equal(await readFile(join(dir, "en-US/strings.conf"), "utf8"), "!system 1 x");
-  const second = await refreshCards(dir, { sources, ...noWait });
+  const second = await refreshCards(dir, { sources, ...QUICK });
   assert.equal(second[0].status, "current");
 });
 
 test("a failed file leaves the previous set untouched and no temporary files", async (t) => {
-  const { base } = await origin(t, { "/b/cards.cdb": { body: cdb("new-cdb") } });
+  const { base } = await origin(t, { "/b/cards.cdb": { body: cardDatabase(1) } });
   const dir = await tempDir(t);
   await mkdir(join(dir, "zh-CN"), { recursive: true });
-  await writeFile(join(dir, "zh-CN/cards.cdb"), "old-cdb");
+  await writeFile(join(dir, "zh-CN/cards.cdb"), cardDatabase(0));
   await writeFile(join(dir, "zh-CN/strings.conf"), "old-strings");
   const sources = [{ name: "zh-CN", base: `${base}/b/`, files: ["cards.cdb", "strings.conf"] }];
-  const [result] = await refreshCards(dir, { sources, attempts: 2, ...noWait });
+  const [result] = await refreshCards(dir, { sources, attempts: 2, ...QUICK });
   assert.equal(result.status, "failed");
   assert.match(result.error, /strings\.conf/);
   assert.match(result.error, /404/);
-  assert.equal(await readFile(join(dir, "zh-CN/cards.cdb"), "utf8"), "old-cdb");
+  assert.deepEqual(await readFile(join(dir, "zh-CN/cards.cdb")), cardDatabase(0));
   assert.deepEqual((await readdir(join(dir, "zh-CN"))).sort(), ["cards.cdb", "strings.conf"]);
 });
 
 test("a transient server error is retried with backoff before giving up", async (t) => {
-  let calls = 0;
+  const times = [];
+  const database = cardDatabase();
   const { base, hits } = await origin(t, {
-    "/c/test-release.cdb": () => (++calls < 3 ? { status: 503, body: "busy" } : { body: cdb("finally") }),
+    "/c/test-release.cdb": () => (times.push(performance.now()) < 3 ? { status: 503, body: "busy" } : { body: database }),
   });
   const dir = await tempDir(t);
-  const waits = [];
   const sources = [{ name: "super-pre", base: `${base}/c/`, files: ["test-release.cdb"] }];
-  const [result] = await refreshCards(dir, {
-    sources, attempts: 3, sleep: async (ms) => waits.push(ms), random: () => 0.5,
-  });
+  // Real sleeps. The jitter is fixed at its middle so the waits are 40 and 80 ms:
+  // with real jitter a grown second wait could be shorter than the first.
+  const [result] = await refreshCards(dir, { sources, attempts: 3, baseDelayMs: 40, random: () => 0.5 });
   assert.equal(result.status, "updated");
   assert.equal(hits.length, 3);
-  assert.equal(waits.length, 2);
-  assert.ok(waits[1] > waits[0], "backoff grows between attempts");
-  assert.equal(await readFile(join(dir, "super-pre/test-release.cdb"), "utf8"), cdb("finally"));
+  // Lower bounds only: a slow machine makes waits longer, never shorter.
+  const [first, second] = [times[1] - times[0], times[2] - times[1]];
+  assert.ok(first >= 35, `first wait ${first} ms`);
+  assert.ok(second >= 70, `second wait ${second} ms: the backoff grows`);
+  assert.deepEqual(await readFile(join(dir, "super-pre/test-release.cdb")), database);
 });
 
 test("a 200 body that is not card data is refused and the previous files stay", async (t) => {
   const { base } = await origin(t, {
     "/d/cards.cdb": { body: "<html>sign in to the network</html>" }, "/d/strings.conf": { body: "!system 1 x" },
-    "/e/cards.cdb": { body: cdb("good") }, "/e/strings.conf": { body: "<html>error</html>" },
+    "/e/cards.cdb": { body: cardDatabase(1) }, "/e/strings.conf": { body: "<html>error</html>" },
   });
   const dir = await tempDir(t);
   await mkdir(join(dir, "zh-CN"), { recursive: true });
-  await writeFile(join(dir, "zh-CN/cards.cdb"), cdb("old"));
+  await writeFile(join(dir, "zh-CN/cards.cdb"), cardDatabase(0));
   const sources = [
     { name: "zh-CN", base: `${base}/d/`, files: ["cards.cdb", "strings.conf"] },
     { name: "en-US", base: `${base}/e/`, files: ["cards.cdb", "strings.conf"] },
   ];
-  const [html, strings] = await refreshCards(dir, { sources, ...noWait });
+  const [html, strings] = await refreshCards(dir, { sources, ...QUICK });
   assert.equal(html.status, "failed");
   assert.match(html.error, /cards\.cdb: not a SQLite card database/);
-  assert.equal(await readFile(join(dir, "zh-CN/cards.cdb"), "utf8"), cdb("old"));
+  assert.deepEqual(await readFile(join(dir, "zh-CN/cards.cdb")), cardDatabase(0));
   assert.equal(strings.status, "failed");
   assert.match(strings.error, /strings\.conf: not a strings file/);
   assert.deepEqual(await readdir(dir), ["zh-CN"], "nothing was installed for the refused set");
 });
 
 test("a body over the size limit is refused without retrying", async (t) => {
-  const { base, hits } = await origin(t, { "/f/test-release.cdb": { body: cdb("0123456789") } });
+  const { base, hits } = await origin(t, { "/f/test-release.cdb": { body: cardDatabase() } });
   const dir = await tempDir(t);
   const sources = [{ name: "super-pre", base: `${base}/f/`, files: ["test-release.cdb"] }];
-  const [result] = await refreshCards(dir, { sources, attempts: 3, maxFileBytes: 8, ...noWait });
+  const [result] = await refreshCards(dir, { sources, attempts: 3, maxFileBytes: 8, ...QUICK });
   assert.equal(result.status, "failed");
   assert.match(result.error, /over the 8 byte limit/);
   assert.equal(hits.length, 1);
 });
 
 test("a body that streams past the size limit is cut off as it arrives", async (t) => {
-  const { base, hits } = await origin(t, { "/g/test-release.cdb": { stream: cdb("0123456789") } });
+  const { base, hits } = await origin(t, { "/g/test-release.cdb": { stream: cardDatabase() } });
   const dir = await tempDir(t);
   const sources = [{ name: "super-pre", base: `${base}/g/`, files: ["test-release.cdb"] }];
-  const [result] = await refreshCards(dir, { sources, attempts: 3, timeoutMs: 2000, maxFileBytes: 64, ...noWait });
+  const [result] = await refreshCards(dir, { sources, attempts: 3, timeoutMs: 2000, maxFileBytes: 64, ...QUICK });
   assert.equal(result.status, "failed");
   assert.match(result.error, /over the 64 byte limit/, "not a timeout after buffering an endless body");
   assert.equal(hits.length, 1);

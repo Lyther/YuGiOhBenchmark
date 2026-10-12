@@ -55,6 +55,10 @@ const FAULT_REJOINS = 2;
 // srvpro answers a recognized rejoin within a second; silence means it no
 // longer holds the match (it may even have made a fresh room of that name).
 const RESTORE_MS = 15_000;
+// An accepted surrender ends the duel within a round trip. A refused one
+// (srvpro ctos_follow 'SURRENDER') is never passed on, and the duel still
+// waits on the pending prompt.
+const SURRENDER_GRACE_MS = 10_000;
 const OBSERVER = 7;
 const LOST_CONNECTION = 0x4;
 // Control characters and Unicode line and paragraph separators.
@@ -153,7 +157,7 @@ class Seat {
     [YGOProMsgRetry, (seat) => seat.#onRetry()],
   ]);
 
-  #config; #catalog; #record; #connect; #log; #graceMs; #random; #rejoinBaseMs; #restoreMs;
+  #config; #catalog; #record; #connect; #log; #graceMs; #random; #rejoinBaseMs; #restoreMs; #surrenderGraceMs;
   #connection = null;
   #generation = 0;
   #version;
@@ -187,11 +191,12 @@ class Seat {
   #matchKill = false;
   #decided = null;
   #finished = null;
+  #held = null;
   #state;
 
   constructor({
     config, catalog, deck, record, connect, log, replayGraceMs = REPLAY_GRACE_MS, rejoinBaseMs = REJOIN_BASE_MS, random = Math.random,
-    restoreMs = RESTORE_MS,
+    restoreMs = RESTORE_MS, surrenderGraceMs = SURRENDER_GRACE_MS,
   }) {
     this.#config = config;
     this.#catalog = catalog;
@@ -201,6 +206,7 @@ class Seat {
     this.#graceMs = replayGraceMs;
     this.#rejoinBaseMs = rejoinBaseMs;
     this.#restoreMs = restoreMs;
+    this.#surrenderGraceMs = surrenderGraceMs;
     this.#random = random;
     this.#state = {
       phase: "deck", room: config.room, name: config.name, host: false, opponent: null, opponentReady: false,
@@ -277,8 +283,32 @@ class Seat {
     this.#requireLive();
     if (this.#state.phase !== "duel") throw new SeatError(`surrender works only during a duel (phase ${this.#state.phase})`);
     this.#send(encodeSurrender());
-    this.#state.prompt = null;
+    this.#holdPrompt();
     return this.wait();
+  }
+
+  // The pending prompt is put away until the duel ends, and given back if it
+  // does not end in time.
+  #holdPrompt() {
+    const { match, prompt } = this.#state;
+    // A surrender repeated while one is held keeps the prompt held first.
+    const earlier = this.#held?.duel === match.duel ? this.#held.prompt : null;
+    clearTimeout(this.#held?.timer);
+    const held = { duel: match.duel, prompt: prompt ?? earlier };
+    held.timer = setTimeout(() => this.#surrenderRefused(held), this.#surrenderGraceMs);
+    held.timer.unref?.();
+    this.#held = held;
+    this.#state.prompt = null;
+  }
+
+  #surrenderRefused(held) {
+    if (this.#held !== held) return;
+    this.#held = null;
+    if (this.#closing || this.#state.phase !== "duel" || this.#state.match.duel !== held.duel || !this.#inProgress()) return;
+    this.#event("server", "The server did not accept the surrender; the duel goes on");
+    if (!held.prompt || this.#state.prompt) return;
+    this.#state.prompt = held.prompt;
+    this.#wake("prompt");
   }
 
   setDeck(deck) {
@@ -295,6 +325,7 @@ class Seat {
     if (this.#replayTimer !== null) this.#finishMatch();
     clearTimeout(this.#rejoinTimer);
     clearTimeout(this.#restoreTimer);
+    clearTimeout(this.#held?.timer);
     const { phase, match } = this.#state;
     const resumable = this.#started && phase !== "ended" && phase !== "disconnected";
     if (resumable) this.#writeResult({ type: "interrupted", phase, duel: match.duel, turn: this.#state.board?.turn ?? 0, reason: why });
@@ -555,8 +586,11 @@ class Seat {
     }
     this.#rejoins += 1;
     this.#rejoin = { reason, attempts: 0 };
-    // srvpro resends a started match's pending prompt; the deck prompt is ours.
+    // srvpro resends a started match's pending prompt, a surrender's held one
+    // included; the deck prompt is ours.
     if (this.#started) this.#state.prompt = null;
+    clearTimeout(this.#held?.timer);
+    this.#held = null;
     this.#ready = [false, false];
     this.#startSent = false;
     this.#state.waiting = "rejoin";

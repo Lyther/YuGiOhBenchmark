@@ -29,49 +29,29 @@ Implementation is complete when two real agents, each in its own runtime, build 
 
 IDs come from the concept. `D-` items are derived from research done for this document.
 
-- `G-01` Goal: the model builds its own deck (search, card text, edit, YDK/`ydke://` import); the server's deck check is the only check.
-  Evidence: concept G-01, E-04, E-10.
-  Architecture impact: `cards/catalog.js` (search, text), `deck/deck.js` (edit, import, `UPDATE_DECK` payload), deck prompt and `DECKERROR` translation in `seat/controller.js`.
-  Verification gate: `deck.test.js` round trips; Q-03 rejection tests; the agents' own decks in Q-01.
+- `G-01` Goal: the model builds its own deck (search, card text, edit, YDK/`ydke://` import); the server's deck check is the only check. Evidence: concept G-01, E-04, E-10. Architecture impact: `cards/catalog.js` (search, text), `deck/deck.js` (edit, import, `UPDATE_DECK` payload), deck prompt and `DECKERROR` translation in `seat/controller.js`. Verification gate: `deck.test.js` round trips; Q-03 rejection tests; the agents' own decks in Q-01.
 
-- `G-02` Goal: a full Bo3 — RPS, first/second, every in-duel prompt, siding, surrender.
-  Evidence: concept G-02, E-06.
-  Architecture impact: controller phases `deck → lobby → rps → first → duel → side → … → ended`; prompt builders for all 20 response-bearing messages in `ygopro-msg-encode` plus RPS, first/second, deck and side.
-  Verification gate: Q-01 agent matches; `prompts.test.js` covers every prompt type.
+- `G-02` Goal: a full Bo3 — RPS, first/second, every in-duel prompt, siding, surrender. Evidence: concept G-02, E-06. Architecture impact: controller phases `deck → lobby → rps → first → duel → side → … → ended`; prompt builders for all 20 response-bearing messages in `ygopro-msg-encode` plus RPS, first/second, deck and side. Verification gate: Q-01 agent matches; `prompts.test.js` covers every prompt type.
 
-- `G-03` Goal: chat both ways.
-  Evidence: concept G-03; srvpro treats lines starting with `/` as commands.
-  Architecture impact: `chat` tool; incoming `STOC_CHAT` tagged as opponent, server or observer; a new opponent line wakes a pending `wait`.
-  Verification gate: the smoke run sends one line each way; `controller.test.js` tags captured server lines; the agents chat in Q-01.
+- `G-03` Goal: chat both ways. Evidence: concept G-03; srvpro treats lines starting with `/` as commands. Architecture impact: `chat` tool; incoming `STOC_CHAT` tagged as opponent, server or observer; a new opponent line wakes a pending `wait`. Verification gate: the smoke run sends one line each way; `controller.test.js` tags captured server lines; the agents chat in Q-01.
 
-- `G-04` Goal: each match leaves the server's replays plus one result line per duel.
-  Evidence: concept G-04, E-07; srvpro sends match replays just before `DUEL_END` ([source](https://github.com/mycard/srvpro/blob/c16bbccddbd5f3304e6e1d93118db45e8868003f/ygopro-server.coffee#L3111-L3126)).
-  Architecture impact: `seat/record.js` writes raw `STOC_REPLAY` payload bytes as `.yrp`, `results.jsonl` and the submitted `.ydk`. The controller reports the match over only once the replays are in (Runtime View, End), so the replays the server sent are saved before the model can end its session.
-  Verification gate: Q-01 checks the files exist; the operator opens one replay in KoishiPro.
+- `G-04` Goal: each match leaves the server's replays plus one result line per duel. Evidence: concept G-04, E-07; srvpro sends match replays just before `DUEL_END` ([source](https://github.com/mycard/srvpro/blob/c16bbccddbd5f3304e6e1d93118db45e8868003f/ygopro-server.coffee#L3111-L3126)). Architecture impact: `seat/record.js` writes raw `STOC_REPLAY` payload bytes as `.yrp`, `results.jsonl` and the submitted `.ydk`. The controller reports the match over only once the replays are in (Runtime View, End), so the replays the server sent are saved before the model can end its session. Verification gate: Q-01 checks the files exist; the operator opens one replay in KoishiPro.
 
-- `C-01` Constraint: the server, room `M,TM0,NF#<id>`, the server version and the card data are all live; nothing is pinned.
-  Architecture impact: room comes from config; the client version handshake retries once on `VERERROR` (existing behavior); card data is refreshed by `npm run cards`; no manifest or hash code. Bo3 is the default room. The seat follows the server's match end and assumes no number of duels, so a Bo1 room (`TM0,NF#<id>`) needs no seat change.
+- `C-01` Constraint: the server, room `M,TM0,NF#<id>`, the server version and the card data are all live; nothing is pinned. Architecture impact: room comes from config; the client version handshake retries once on `VERERROR` (existing behavior); card data is refreshed by `npm run cards`; no manifest or hash code. Bo3 is the default room. The seat follows the server's match end and assumes no number of duels, so a Bo1 room (`TM0,NF#<id>`) needs no seat change.
 
-- `C-02` Constraint: the seat is an MCP server added to an unmodified runtime.
-  Architecture impact: stdio transport, a static tool list, launch recipes in Operations; no tool gating.
+- `C-02` Constraint: the seat is an MCP server added to an unmodified runtime. Architecture impact: stdio transport, a static tool list, launch recipes in Operations; no tool gating.
 
-- `C-03` Constraint: server output passes through unchanged.
-  Architecture impact: no redaction module. `game/labels.js` fills in names the server zeroed for opponent-controlled candidates, from the seat's own board (E-05). That is labeling, not filtering.
+- `C-03` Constraint: server output passes through unchanged. Architecture impact: no redaction module. `game/labels.js` fills in names the server zeroed for opponent-controlled candidates, from the seat's own board (E-05). That is labeling, not filtering.
 
-- `Q-01` Two agents build their decks and finish a Bo3 on 2339 with siding and chat → `DUEL_END`; one replay per duel and the result lines are saved.
-  Mechanism: the whole seat, launched by the Operations recipes. `bin/smoke.js` checks the lobby, side and end path first, without a model.
+- `Q-01` Two agents build their decks and finish a Bo3 on 2339 with siding and chat → `DUEL_END`; one replay per duel and the result lines are saved. Mechanism: the whole seat, launched by the Operations recipes. `bin/smoke.js` checks the lobby, side and end path first, without a model.
 
-- `Q-02` A prompt held for 15 minutes, then answered → still connected, answer accepted.
-  Mechanism: no game clock (`TM0`); the controller answers `STOC_TIME_LIMIT` with `CTOS_TIME_CONFIRM` as soon as the packet arrives. Packet handling never awaits the model.
+- `Q-02` A prompt held for 15 minutes, then answered → still connected, answer accepted. Mechanism: no game clock (`TM0`); the controller answers `STOC_TIME_LIMIT` with `CTOS_TIME_CONFIRM` as soon as the packet arrives. Packet handling never awaits the model.
 
-- `Q-03` Illegal deck, side or answer → the model reads the server's reason and recovers.
-  Mechanism: `DECKERROR` returns to the deck prompt, `SIDEERROR` to the side prompt, and `MSG_RETRY` re-issues the last prompt, each with a `rejected` text.
+- `Q-03` Illegal deck, side or answer → the model reads the server's reason and recovers. Mechanism: `DECKERROR` returns to the deck prompt, `SIDEERROR` to the side prompt, and `MSG_RETRY` re-issues the last prompt, each with a `rejected` text.
 
-- `Q-04` A face-up opponent card in a selection prompt is shown by name.
-  Mechanism: `labels.js` resolves zeroed codes through `board.js` by (controller, location, sequence).
+- `Q-04` A face-up opponent card in a selection prompt is shown by name. Mechanism: `labels.js` resolves zeroed codes through `board.js` by (controller, location, sequence).
 
-- `Q-05` The opponent thinks for 10 minutes → `wait` returns "still waiting" before the runtime's tool timeout, and no events are lost.
-  Mechanism: `wait` blocks at most `YGO_WAIT_MS`. Events stay in an append-only log with a delivery cursor.
+- `Q-05` The opponent thinks for 10 minutes → `wait` returns "still waiting" before the runtime's tool timeout, and no events are lost. Mechanism: `wait` blocks at most `YGO_WAIT_MS`. Events stay in an append-only log with a delivery cursor.
 
 - `U-1..U-4` Unacceptable outcomes from the concept.
   - U-1, missing capability: an unknown message becomes a visible event plus an error log line, never a silent drop.
@@ -146,7 +126,7 @@ IDs come from the concept. `D-` items are derived from research done for this do
 
     A bounded search does not prove that no such client exists. It is enough to choose building the seat on the codec.
   - Library maturity: `ygopro-msg-encode` has had 42 versions since 2026-02. Neos adopted it and reverted the same day (2026-04-30, reason unknown). Its `MSG_RANDOM_SELECTED` and `MSG_BECOME_TARGET` fields are typed differently from the C++ client, but with the same wire width.
-  - Card data: the four `mycard/ygopro-database` locale files return 200 from GitHub raw; both CDBs hold 15,019 cards; there is no license file. MyCard super-pre serves `test-release.cdb` (96 cards), `test-update.cdb` (377 rows) and `test-strings.conf` individually under `cdn02.moecube.com:444/ygopro-super-pre/data/`, byte-identical to the 18 MB `.ypk`, which is updated almost daily. The text is zh-CN only. `ElderLich/TransSuperpre` publishes English versions of the same IDs daily, with no license.
+  - Card data: the four `mycard/ygopro-database` locale files return 200 from GitHub raw; both CDBs hold 15,019 cards; there is no license file. MyCard super-pre serves `test-release.cdb` (96 cards), `test-update.cdb` (377 rows) and `test-strings.conf` individually under `cdn02.moecube.com:444/ygopro-super-pre/data/`, byte-identical to the 18 MB `.ypk`, which is updated almost daily. The text is zh-CN only. `ElderLich/Pre-Release-Translations` publishes English versions of the same IDs several times a day, with no license; it replaced the maintainer's `TransSuperpre`, retired on 2026-10-11.
   - Smoke test on that set: the live en-US `cards.cdb` (8 MB) opens through `ygopro-cdb-encode`; code lookup and filter search work, with filter keys being CDB column names (`atk`, `def`, `race`, `attribute`). A `ydke://` round trip through `ygopro-deck-encode` is exact. The en-US `strings.conf` carries 535 `!system` strings plus the `!victory` texts.
 - Source facts used here: E-04 to E-13 from the concept, plus D-02 to D-05 above. One more: ocgcore re-checks declared card names (`is_declarable`, [source](https://github.com/Fluorohydride/ygopro-core/blob/e5ce3178a7d78d3d31de0ef40993cb83b34772ce/playerop.cpp#L1000-L1020)), so the seat sends the model's declaration as given.
 
@@ -283,61 +263,63 @@ YuGiOhBenchmark/
     sample.ydk                  - IMPLEMENTED: legal no-banlist deck (40/1/8) for the smoke run, the first agent match and offline tests.
   src/
     bin/
-      seat.js                   - IMPLEMENTED: seat entry; config → catalog → deck → controller → MCP stdio; stops on stdin end or SIGTERM after leaving the room and flushing the run folder; never writes to stdout itself.
-      smoke.js                  - IMPLEMENTED: model-free plumbing check; two seats as MCP clients; deck, RPS, first player, one chat line each, surrender each duel, deck kept at side; --restart kills one seat process at its first duel prompt and resumes with a new one; exit 0 when both ended, heard each other and hold complete run folders.
-      cards.js                  - IMPLEMENTED: `npm run cards`; runs cards/sources.js refresh, prints what changed and the catalog counts.
-      probe.js                  - VERIFIED_EXISTING: `npm run probe`; join a room, print lobby JSON, leave; owns describeMessage.
-    config.js                   - VERIFIED_EXISTING: parse and validate YGO_* into a frozen object; owns defaults and limits; reads env only; config.test.js.
-    log.js                      - VERIFIED_EXISTING: pino bound to fd 2; log.test.js and tools.test.js check that stdout carries only JSON-RPC.
+      seat.js                                          - IMPLEMENTED: seat entry; config → catalog → deck → controller → MCP stdio; stops on stdin end or SIGTERM after leaving the room and flushing the run folder; never writes to stdout itself.
+      smoke.js                                         - IMPLEMENTED: model-free plumbing check; two seats as MCP clients; deck, RPS, first player, one chat line each, surrender each duel, deck kept at side; --restart kills one seat process at its first duel prompt and resumes with a new one; exit 0 when both ended, heard each other and hold complete run folders.
+      cards.js                                         - IMPLEMENTED: `npm run cards`; runs cards/sources.js refresh, prints what changed and the catalog counts.
+      probe.js                                         - VERIFIED_EXISTING: `npm run probe`; join a room, print lobby JSON, leave; owns describeMessage.
+    config.js                                          - VERIFIED_EXISTING: parse and validate YGO_* into a frozen object; owns defaults and limits; reads env only; config.test.js.
+    log.js                                             - VERIFIED_EXISTING: pino bound to fd 2; log.test.js and spec/tools.test.js check that stdout carries only JSON-RPC.
     protocol/
-      framing.js                - VERIFIED_EXISTING: uint16 length-prefixed framer; rejects zero-length frames; pure; protocol/framing.test.js.
-      packets.js                - IMPLEMENTED: every CTOS builder the seat sends and STOC parse returning {message, raw}; owns CLIENT_VERSION; no sockets; packets.test.js, gameplay-packets.test.js.
+      framing.js                                       - VERIFIED_EXISTING: uint16 length-prefixed framer; rejects zero-length frames; pure; protocol/framing.test.js.
+      packets.js                                       - IMPLEMENTED: every CTOS builder the seat sends and STOC parse returning {message, raw}; owns CLIENT_VERSION; no sockets; packets.test.js, gameplay-packets.test.js.
     net/
-      connection.js             - VERIFIED_EXISTING: TCP lifecycle, connect timeout, framing, parse, ordered send, close reasons; connection.test.js.
+      connection.js                                    - VERIFIED_EXISTING: TCP lifecycle, connect timeout, framing, parse, ordered send, close reasons; connection.test.js.
     seat/
-      controller.js             - IMPLEMENTED: the seat state machine and seat API (snapshot, wait, answer, chat, surrender, setDeck, markDelivered, close); owns phases, pending prompt, waiter, keepalive, auto-answers, host start, version retry, error translation, results and the replay wait at match end, and the rejoin (lost connection, packet fault, restarted seat; AD-14); no rendering, MCP or fs; controller.test.js, sessions.test.js.
-      view.js                   - IMPLEMENTED: pure mapping to the SeatView and DeckView DTOs (contracts.md Mapping); owns delivery cursors, board elision and the `next` sentence; never drops an event; view.test.js.
-      record.js                 - IMPLEMENTED: run-folder writer for raw .yrp, results.jsonl, submitted .ydk, seat.json, optional session.bin; one ordered write queue and flush(); claim() takes a new folder or one a stopped seat left mid-match and refuses the rest; record.test.js.
+      controller.js                                    - IMPLEMENTED: the seat state machine and seat API (snapshot, wait, answer, chat, surrender, setDeck, markDelivered, close); owns phases, pending prompt, waiter, keepalive, auto-answers, host start, version retry, error translation, results and the replay wait at match end, and the rejoin (lost connection, packet fault, restarted seat; AD-14); no rendering, MCP or fs; controller.test.js, sessions.test.js.
+      view.js                                          - IMPLEMENTED: pure mapping to the SeatView and DeckView DTOs (contracts.md Mapping); owns delivery cursors, board elision and the `next` sentence; never drops an event; view.test.js.
+      record.js                                        - IMPLEMENTED: run-folder writer for raw .yrp, results.jsonl, submitted .ydk, seat.json, optional session.bin; one ordered write queue and flush(); claim() takes a new folder or one a stopped seat left mid-match and refuses the rest; record.test.js.
     game/
-      board.js                  - IMPLEMENTED: pure board reducer for this player's view; per-duel me/opponent mapping (D-04); versions rise across duels; board.test.js.
-      events.js                 - IMPLEMENTED: pure message → event sentence; effect text from desc; events.test.js.
-      labels.js                 - IMPLEMENTED: pure naming of zones, positions, phases and cards; labels.test.js.
+      board.js                                         - IMPLEMENTED: pure board reducer for this player's view; per-duel me/opponent mapping (D-04); versions rise across duels; board.test.js.
+      events.js                                        - IMPLEMENTED: pure message → event sentence; effect text from desc; events.test.js.
+      labels.js                                        - IMPLEMENTED: pure naming of zones, positions, phases and cards; labels.test.js.
       prompts/
-        index.js                - IMPLEMENTED: builder registry, lobby prompts, resolveAnswer(); every response-bearing codec message has a builder; prompts.test.js.
-        options.js              - IMPLEMENTED: shared option labels with the zeroed-code fallback (Q-04) and answer-shape checks (AnswerError).
-        commands.js             - IMPLEMENTED: idle and battle command menus; encode via prepareResponse(type, IndexResponse).
-        selections.js           - IMPLEMENTED: card, tribute, unselect, sum, sort, counter; owns the tribute, sum and counter numbers (D-05), SELECT_SUM padding and SORT_CARD positions (D-02).
-        choices.js              - IMPLEMENTED: chain, yes/no, effect yes/no, option, position, announce race/attribute/number/card, in-duel RPS.
-        places.js               - IMPLEMENTED: place and disfield from the codec's selectable places.
+        index.js                                       - IMPLEMENTED: builder registry, lobby prompts, resolveAnswer(); every response-bearing codec message has a builder; prompts.test.js.
+        options.js                                     - IMPLEMENTED: shared option labels with the zeroed-code fallback (Q-04) and answer-shape checks (AnswerError).
+        commands.js                                    - IMPLEMENTED: idle and battle command menus; encode via prepareResponse(type, IndexResponse).
+        selections.js                                  - IMPLEMENTED: card, tribute, unselect, sum, sort, counter; owns the tribute, sum and counter numbers (D-05), SELECT_SUM padding and SORT_CARD positions (D-02).
+        choices.js                                     - IMPLEMENTED: chain, yes/no, effect yes/no, option, position, announce race/attribute/number/card, in-duel RPS.
+        places.js                                      - IMPLEMENTED: place and disfield from the codec's selectable places.
     cards/
-      catalog.js                - IMPLEMENTED: reads every CDB through sql.js into in-memory maps in priority order, then applies first-edition packs; lookup, name match, filter search, desc text; queries are pure; catalog.test.js.
-      strings-conf.js           - IMPLEMENTED: pure strings.conf parser and merge; strings-conf.test.js.
-      sources.js                - IMPLEMENTED: the card-data source list and refresh (timeouts, retries with jitter, all files of a source or none); sources.test.js against a local HTTP server.
+      catalog.js                                       - IMPLEMENTED: reads every CDB through sql.js into in-memory maps in priority order, then applies first-edition packs; lookup, name match, filter search, desc text; queries are pure; catalog.test.js.
+      strings-conf.js                                  - IMPLEMENTED: pure strings.conf parser and merge; strings-conf.test.js.
+      sources.js                                       - IMPLEMENTED: the card-data source list and refresh (timeouts, retries with jitter, all files of a source or none); sources.test.js against a local HTTP server.
     deck/
-      deck.js                   - IMPLEMENTED: pure working-deck model; YDK/ydke/deck-code import and export; edits in import, clear, remove, add, move order; no legality checks; deck.test.js.
+      deck.js                                          - IMPLEMENTED: pure working-deck model; YDK/ydke/deck-code import and export; edits in import, clear, remove, add, move order; no legality checks; deck.test.js.
     mcp/
-      server.js                 - IMPLEMENTED: McpServer per connection through serveStdio (both protocol eras); logs each call's name, duration and result size; no game logic.
-      tools.js                  - IMPLEMENTED: the eight tools with zod input schemas, error mapping and the anthropic/maxResultSizeChars _meta; argument mapping only; tools.test.js.
-      render.js                 - IMPLEMENTED: pure DTO → text; folds repeated auto-pass events; never trims; render.test.js.
+      server.js                                        - IMPLEMENTED: McpServer per connection through serveStdio (both protocol eras); logs each call's name, duration and result size; no game logic.
+      tools.js                                         - IMPLEMENTED: the eight tools with zod input schemas, error mapping and the anthropic/maxResultSizeChars _meta; argument mapping only; spec/tools.test.js.
+      render.js                                        - IMPLEMENTED: pure DTO → text; folds repeated auto-pass events; never trims; render.test.js.
   spec/
-    seat-entry.test.js          - GREEN: real MCP entry contract against the real seat; needs `npm run cards`; run separately.
-    upstream-msg-encode.test.js - RED on purpose: the four codec defects of D-02, for the upstream report.
-  docs/upstream/ygopro-msg-encode.md - Prepared upstream report; filing needs the owner's go-ahead (P3.2).
+    seat-entry.test.js                                 - GREEN: real MCP entry contract against the real seat; `npm run spec`, after `npm run cards`.
+    tools.test.js                                      - GREEN: the tool list, deck startup, card lookups and deck tools of the real seat over stdio MCP, on the downloaded cards.
+    catalog.test.js, deck.test.js                      - GREEN: card vocabulary, strings and names, deck placement and edits, on the downloaded cards.
+    upstream-msg-encode.test.js                        - RED on purpose: the four codec defects of D-02, for the upstream report.
+  docs/upstream/ygopro-msg-encode.md                   - Prepared upstream report; filing needs the owner's go-ahead (P3.2).
   test/
     core-contract.test.js, log.test.js, config.test.js - VERIFIED_EXISTING core tests.
-    protocol/                   - framing, packets and gameplay-packets tests (every CTOS builder parsed back by the codec).
-    net/connection.test.js      - VERIFIED_EXISTING: real local TCP peer.
-    cards/                      - catalog (fixture CDB built in-test, layering, first-edition pack), sources, strings-conf.
-    deck/deck.test.js           - round trips, sample deck, placement, edits and their errors.
-    game/                       - board, events, labels and prompts tests from real encoded messages.
-    seat/                       - controller (connection double), record, view, sessions (real captures replayed).
-    mcp/                        - render, and tools against the real seat process over stdio MCP.
-    helpers/                    - fixture catalog, codec wire helpers, the connection double.
+    protocol/                                          - framing, packets and gameplay-packets tests (every CTOS builder parsed back by the codec).
+    net/connection.test.js                             - VERIFIED_EXISTING: real local TCP peer.
+    cards/                                             - catalog (names, search, layering, missing sources and first-edition packs on a CDB built in-test), sources (real CDBs from a loopback origin), strings-conf.
+    deck/deck.test.js                                  - round trips, sample deck, import formats and edits that cannot apply.
+    game/                                              - board, events, labels and prompts tests from real encoded messages.
+    seat/                                              - controller (connection double; a scripted peer over real TCP for the tests that need no controlled packets), record, view, sessions (real captures replayed).
+    mcp/                                               - render.
+    helpers/                                           - fixture catalog, codec wire helpers, the connection double, the capture reader.
     fixtures/
-      sessions/                 - raw STOC captures (session.bin) from live smoke runs; README says where they came from.
-      cards.json                - real en-US rows and strings from which tests build their card set.
-  data/cards/                   - Local card data written by `npm run cards`, plus optional first-edition/*.ypk packs; gitignored.
-  runs/                         - Run folders written by seats; gitignored.
+      sessions/                                        - raw STOC captures (session.bin) from live smoke runs and the first agent match; README says where they came from.
+      cards.json                                       - real en-US rows and strings from which tests build their card set.
+  data/cards/                                          - Local card data written by `npm run cards`, plus optional first-edition/*.ypk packs; gitignored.
+  runs/                                                - Run folders written by seats; gitignored.
 ```
 
 ## Data and State
@@ -428,8 +410,8 @@ The full schemas, DTOs and examples are in [contracts.md](contracts.md). The rul
 - **Q-04** (zeroed opponent codes). Proof: `prompts.test.js` builds a `SELECT_CARD` with an opponent face-up candidate whose code is 0 and asserts the label is the card's name from the board.
 - **Q-05** (long opponent turn). Proof: in the first two-agent match, the seat logs show `wait` returning at the budget with no dropped events (event sequence numbers are contiguous in the agent transcript).
 - **Encoding fidelity.** `prompts.test.js` checks every response type's bytes against the stock-client layout (D-02).
-- **Stdout purity.** `tools.test.js` asserts every stdout line parses as JSON-RPC.
-- **Tool list.** `tools.test.js` snapshots the registered tool names and schemas, so a change shows up in review.
+- **Stdout purity.** `spec/tools.test.js` asserts every stdout line parses as JSON-RPC.
+- **Tool list.** `spec/tools.test.js` snapshots the registered tool names and schemas, so a change shows up in review.
 - **No event loss.** `view.test.js` delivers a long backlog over many `wait` calls and checks that every event arrives exactly once, in order.
 - **Complete record at match end.** `controller.test.js` checks that `ended` is reported only after the replays arrive, including after a one-duel match.
 - **Smoke.** `npm run smoke` exits 0. It is a diagnostic to run when the lobby, side or end path changes, not a release gate.
@@ -488,7 +470,7 @@ The full schemas, DTOs and examples are in [contracts.md](contracts.md). The rul
   - Decision: `npm run cards` fetches these individual files (URLs in contracts.md Card Data Inputs):
     - MyCard `ygopro-database` en-US and zh-CN;
     - MyCard super-pre `data/`;
-    - TransSuperpre English base files.
+    - Pre-Release-Translations English base files.
 
     The catalog merges them so that English wins and Chinese fills gaps.
   - Consequences: text may lag the server for brand-new cards (shown as `no local text`), and community translations can be wrong (the card info says which source it used). The sources carry no license, so the data stays local and is never committed or redistributed.
@@ -526,7 +508,7 @@ The full schemas, DTOs and examples are in [contracts.md](contracts.md). The rul
 - **Prompt coverage gaps.** Impact: an unseen message family stalls a duel. Mitigation: `unreadable` events, loud logs, per-type tests, captured sessions. Trigger: any `unreadable` event in a live run. Next proof: agent matches with decks that use Xyz, Link, Pendulum and counters; each gap found becomes a fix plus a test from its captured bytes.
 - **Board drift.** Impact: wrong labels or stats mislead the model. Mitigation: zones are rebuilt from `UPDATE_DATA`; the reducer has focused diagnostic regressions. Trigger: a mismatch between the board and the next `UPDATE_DATA`. Normal live-duel capture comparison remains P1.12; there is no runtime comparison gate.
 - **Library defects beyond D-02.** Impact: wrong response bytes or misparsed messages. The library is young (42 versions since February), and Neos reverted its adoption for reasons unknown. Mitigation: byte-layout tests for every prompt type against the stock client; P1.12 parses every captured live packet; fixes reported upstream. Trigger: `MSG_RETRY` after a well-formed answer, or any `unreadable` event.
-- **MCP SDK v2 churn.** Impact: a breaking change on upgrade. Mitigation: exact pin; `tools.test.js`. Trigger: a runtime handshake failure or a needed fix only in a newer major.
+- **MCP SDK v2 churn.** Impact: a breaking change on upgrade. Mitigation: exact pin; `spec/tools.test.js`. Trigger: a runtime handshake failure or a needed fix only in a newer major.
 - **Side Deck time limit.** srvpro on 2339 gives 3 minutes to side. Impact: a slow model could be kicked between duels. Mitigation: the server's announcement reaches the model as a server event, and the task prompt says so. Trigger: a kick after `CHANGE_SIDE` in an agent match.
 - **Unknown 2339 settings** (heartbeat). Impact: kicks. Mitigation: keepalives are confirmed on receipt. No `TIME_LIMIT` packet appeared in the smoke runs. Trigger: a kick or a disconnect during a long think. The reconnect hold is measured: 2339 kept a dropped seat for 298 s, then closed the other seat's socket without `MSG_WIN` (2026-10-08).
 - **Away from the match.** Impact: a duel that ends while a seat is away (the opponent surrendered) has no result for that seat, since srvpro resends no `MSG_WIN` and sends no score; a seat that never returns leaves the opponent waiting up to the hold, with no result. Mitigation: rejoins take seconds; the records say `unknown`, `interrupted` or `aborted` instead of inventing a result, and an `unknown` duel never counts as a draw. Trigger: an `unknown`, `interrupted` or `aborted` line in an agent match.

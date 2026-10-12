@@ -30,11 +30,13 @@ import {
   YGOProMsgUnequip,
   YGOProMsgUpdateCard,
   YGOProMsgUpdateData,
+  YGOProStocGameMsg,
 } from "ygopro-msg-encode";
 
-import { applyBoard, cardAt, createBoard } from "../../src/game/board.js";
+import { applyBoard, cardAt, cardCode, createBoard } from "../../src/game/board.js";
 import { parseServerPacket } from "../../src/protocol/packets.js";
 import { fixtureCatalog } from "../helpers/fixture-catalog.js";
+import { readSession } from "../helpers/sessions.js";
 import { gameMessage } from "../helpers/wire.js";
 
 const BLUE_EYES = 89631139;
@@ -212,6 +214,21 @@ test("confirmations reveal opponent hand cards and shuffles hide them again", ()
   assert.deepEqual(board.sides.opponent.hand.map((card) => card.code), [0, 0]);
 });
 
+// duelclient.cpp MSG_MOVE: the stock client keeps what a player saw of a card
+// when the server hides its code in a move, except into the Extra Deck.
+test("a card the player saw stays known through a move that hides it, except into the Extra Deck", () => {
+  let board = start(0);
+  board = apply(board, YGOProMsgDraw, { player: 1, count: 2, cards: [0, 0] });
+  board = apply(board, YGOProMsgConfirmCards, { player: 0, skipPanel: 0, count: 1, cards: [{ code: POT, controller: 1, location: HAND, sequence: 1 }] });
+  board = apply(board, YGOProMsgMove, { code: 0, previous: at(1, HAND, 1), current: at(1, SZONE, 2, C.POS_FACEDOWN), reason: 0 });
+  assert.equal(cardAt(board, 1, SZONE, 2).code, POT, "the revealed card it set");
+  board = apply(board, YGOProMsgMove, { code: 0, previous: at(1, SZONE, 2, C.POS_FACEDOWN), current: at(1, HAND, 1, FACEDOWN_DEFENSE), reason: 0 });
+  assert.deepEqual(board.sides.opponent.hand.map((card) => card.code), [0, POT], "and back in hand");
+  board = apply(board, YGOProMsgMove, { code: UTOPIA, previous: at(1, C.LOCATION_EXTRA, 0), current: at(1, MZONE, 5, FACEUP_ATTACK), reason: 0 });
+  board = apply(board, YGOProMsgMove, { code: 0, previous: at(1, MZONE, 5, FACEUP_ATTACK), current: at(1, C.LOCATION_EXTRA, 0, FACEDOWN_DEFENSE), reason: 0 });
+  assert.equal(board.sides.opponent.extra[0].code, 0, "a face-down Extra Deck card is unknown again");
+});
+
 test("a set-card shuffle keeps every occupied slot and follows disclosed material moves", () => {
   let board = start(0);
   board = apply(board, YGOProMsgMove, { code: BLUE_EYES, previous: at(1, HAND, 0), current: at(1, MZONE, 0, FACEDOWN_DEFENSE), reason: 0 });
@@ -225,6 +242,44 @@ test("a set-card shuffle keeps every occupied slot and follows disclosed materia
   assert.deepEqual(board.sides.opponent.monsters[0].overlays, [POT]);
   assert.equal(board.sides.opponent.monsters[3].overlays, undefined);
   assert.deepEqual(board.sides.me.monsters, Array(7).fill(null));
+});
+
+const QUERY_STATS = ["type", "attribute", "race", "attack", "defense", "level"];
+
+// Two opponent monsters the player saw face-up, with their stats, then set.
+function seenThenSet() {
+  let board = start(0);
+  const flags = C.QUERY_CODE | C.QUERY_POSITION | C.QUERY_TYPE | C.QUERY_ATTRIBUTE | C.QUERY_RACE | C.QUERY_ATTACK | C.QUERY_DEFENSE | C.QUERY_LEVEL;
+  for (const [sequence, code, attack, defense, level] of [[0, BLUE_EYES, 3000, 2500, 8], [1, UTOPIA, 2500, 2000, 4]]) {
+    const card = {
+      flags, code, controller: 1, location: MZONE, sequence, position: FACEUP_ATTACK, type: C.TYPE_MONSTER | C.TYPE_NORMAL,
+      attribute: C.ATTRIBUTE_LIGHT, race: C.RACE_DRAGON, attack, defense, level,
+    };
+    board = apply(board, YGOProMsgUpdateCard, { controller: 1, location: MZONE, sequence, card });
+    board = apply(board, YGOProMsgPosChange, { code, card: { controller: 1, location: MZONE, sequence }, previousPosition: FACEUP_ATTACK, currentPosition: FACEDOWN_DEFENSE });
+  }
+  return board;
+}
+
+// client_card.cpp UpdateInfo: a query that hides the card (no flags) clears
+// what earlier queries said about it but keeps its code and position.
+test("a hidden query keeps a card's code and position and drops its stats, as the stock client does", () => {
+  const board = apply(seenThenSet(), YGOProMsgUpdateCard, { controller: 1, location: MZONE, sequence: 0, card: { flags: 0 } });
+  const card = cardAt(board, 1, MZONE, 0);
+  assert.deepEqual([card.code, card.position], [BLUE_EYES, FACEDOWN_DEFENSE]);
+  assert.deepEqual(QUERY_STATS.filter((key) => card[key] !== undefined), []);
+});
+
+test("a hidden set-card shuffle leaves nothing that tells the shuffled cards apart", () => {
+  // Stock layout: every old location, then every new one; zero hides it.
+  const packet = Buffer.from([20, 0, 1, 36, 4, 2, 1, 4, 0, 8, 1, 4, 1, 8, 0, 0, 0, 0, 0, 0, 0, 0]);
+  let board = applyBoard(seenThenSet(), parseServerPacket(packet).message.msg);
+  for (const sequence of [0, 1]) board = apply(board, YGOProMsgUpdateCard, { controller: 1, location: MZONE, sequence, card: { flags: 0 } });
+  for (const sequence of [0, 1]) {
+    const card = cardAt(board, 1, MZONE, sequence);
+    assert.deepEqual([card.code, card.position], [0, FACEDOWN_DEFENSE]);
+    assert.deepEqual(QUERY_STATS.filter((key) => card[key] !== undefined), [], `slot ${sequence}`);
+  }
 });
 
 test("swapping Deck and GY returns Extra Deck monsters before face-up Pendulums", async () => {
@@ -303,4 +358,69 @@ test("the reducer is pure: input boards are untouched and unrelated messages cha
   assert.equal(apply(next, YGOProMsgHint, { type: C.HINT_SELECTMSG, player: 0, desc: 500 }), next);
   assert.equal(cardAt(next, 0, HAND, 0).code, POT);
   assert.equal(cardAt(next, 1, MZONE, 0), null);
+});
+
+// Both seats of the first agent match, room M,TM0,NF#am866b8d5a on 2339
+// (fixtures/sessions/README.md): three duels, and the first player changes.
+async function capturedMessages(name) {
+  const messages = [];
+  for (const { packet } of await readSession(name)) {
+    const { message } = parseServerPacket(packet);
+    if (message instanceof YGOProStocGameMsg) messages.push(message.msg);
+  }
+  return messages;
+}
+
+const LISTS = { [HAND]: "hand", [GRAVE]: "grave", [C.LOCATION_REMOVED]: "banished", [C.LOCATION_EXTRA]: "extra" };
+const reported = (query) => (query?.queryLength ?? 0) > 4;
+
+function cardMismatch(mine, query) {
+  if (!reported(query)) return mine ? `the board has ${mine.code || "a card"}, the server none` : null;
+  if (!mine) return `the server has ${cardCode(query.code) || "a card"}, the board none`;
+  const code = query.code === undefined ? 0 : cardCode(query.code);
+  if (code && mine.code && code !== mine.code) return `code ${mine.code}, server ${code}`;
+  if (query.position !== undefined && query.position !== mine.position) return `position ${mine.position}, server ${query.position}`;
+  return null;
+}
+
+// An MSG_UPDATE_DATA is the server's own copy of one zone; it is checked
+// against the board before it is applied.
+function zoneMismatches(board, { player, location, cards }) {
+  const side = board.sides[player === board.me ? "me" : "opponent"];
+  if (location === DECK) return side.deck === cards.length ? [] : [`deck ${side.deck}, server ${cards.length}`];
+  if (!LISTS[location]) return cards.map((query, index) => cardMismatch(cardAt(board, player, location, index), query)).filter(Boolean);
+  const list = side[LISTS[location]];
+  const live = cards.filter(reported);
+  if (list.length !== live.length) return [`${LISTS[location]}: ${list.length} cards, server ${live.length}`];
+  return live.map((query, index) => cardMismatch(list[index], query)).filter(Boolean);
+}
+
+// Every report in each capture: MSG_UPDATE_DATA and MSG_UPDATE_CARD.
+const REPORTS = { "match-claude": 1775, "match-codex": 1775 };
+
+test("the board agrees with every zone and card the server reported in a real agent match", async () => {
+  const catalog = await fixtureCatalog();
+  for (const name of ["match-claude", "match-codex"]) {
+    let board = null;
+    let checks = 0;
+    const mismatches = [];
+    for (const msg of await capturedMessages(name)) {
+      if (msg instanceof YGOProMsgStart) {
+        board = createBoard({ duel: 1, start: msg });
+        continue;
+      }
+      if (!board) continue;
+      if (msg instanceof YGOProMsgUpdateData) {
+        checks += 1;
+        mismatches.push(...zoneMismatches(board, msg).map((text) => `turn ${board.turn}, location ${msg.location}: ${text}`));
+      } else if (msg instanceof YGOProMsgUpdateCard) {
+        checks += 1;
+        const mismatch = cardMismatch(cardAt(board, msg.controller, msg.location, msg.sequence), msg.card);
+        if (mismatch) mismatches.push(`turn ${board.turn}, card ${msg.location}/${msg.sequence}: ${mismatch}`);
+      }
+      board = applyBoard(board, msg, { catalog });
+    }
+    assert.equal(checks, REPORTS[name], `${name}: zone and card reports checked`);
+    assert.deepEqual(mismatches, [], name);
+  }
 });

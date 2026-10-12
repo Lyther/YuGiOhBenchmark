@@ -4,6 +4,7 @@ import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { createRecorder, runFolder } from "../../src/seat/record.js";
 
@@ -13,7 +14,6 @@ async function runDir(t) {
   return dir;
 }
 
-const fixedNow = () => new Date("2026-10-07T12:00:00.000Z");
 // A real process that has exited: the seat that left the folder is gone.
 const DEAD_PID = spawnSync(process.execPath, ["-e", ""]).pid;
 
@@ -48,7 +48,7 @@ test("a run folder is claimed once, so a colliding seat, a finished match or a f
 
 test("a folder a stopped seat left mid-match is taken over with its progress", async (t) => {
   const dir = await runDir(t);
-  const make = () => createRecorder({ runDir: dir, room: "M,TM0,NF#abc123", name: "opus-seat", now: fixedNow });
+  const make = () => createRecorder({ runDir: dir, room: "M,TM0,NF#abc123", name: "opus-seat" });
   const first = make();
   first.claim();
   await first.deck(1, "#main\n89631139\n#extra\n!side\n");
@@ -85,7 +85,8 @@ test("a folder left before any duel started is reused afresh", async (t) => {
 
 test("results are appended as JSON lines and decks and replays are written once each", async (t) => {
   const dir = await runDir(t);
-  const recorder = createRecorder({ runDir: dir, room: "M,TM0,NF#abc123", name: "opus-seat", now: fixedNow });
+  const before = Date.now();
+  const recorder = createRecorder({ runDir: dir, room: "M,TM0,NF#abc123", name: "opus-seat" });
   await recorder.deck(1, "#main\n89631139\n#extra\n!side\n");
   await recorder.replay(Uint8Array.from([0x31, 0x70, 0x72, 0x79]));
   await recorder.replay(Uint8Array.from([1, 2, 3]));
@@ -95,11 +96,14 @@ test("results are appended as JSON lines and decks and replays are written once 
   assert.deepEqual((await readdir(folder)).sort(), ["duel-1.ydk", "replay-1.yrp", "replay-2.yrp", "results.jsonl"]);
   assert.deepEqual([...await readFile(join(folder, "replay-1.yrp"))], [0x31, 0x70, 0x72, 0x79]);
   assert.equal(await readFile(join(folder, "duel-1.ydk"), "utf8"), "#main\n89631139\n#extra\n!side\n");
+  const after = Date.now();
   const lines = (await readFile(join(folder, "results.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
-  assert.deepEqual(lines[0], {
-    type: "duel", room: "M,TM0,NF#abc123", duel: 1, result: "win", reason: "LP reached 0",
-    reasonCode: 1, turns: 7, first: true, at: "2026-10-07T12:00:00.000Z",
+  const { at, ...line } = lines[0];
+  assert.deepEqual(line, {
+    type: "duel", room: "M,TM0,NF#abc123", duel: 1, result: "win", reason: "LP reached 0", reasonCode: 1, turns: 7, first: true,
   });
+  assert.match(at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  assert.ok(Date.parse(at) >= before && Date.parse(at) <= after, "the time the line was written");
   assert.equal(lines[1].type, "match");
   assert.equal(lines[1].room, "M,TM0,NF#abc123");
   await assert.rejects(recorder.deck(1, "#main\n"), /exists/, "a written deck is never overwritten");
@@ -107,7 +111,7 @@ test("results are appended as JSON lines and decks and replays are written once 
 
 test("a resumed seat cuts off a result line a hard stop left unfinished, so its own lines parse", async (t) => {
   const dir = await runDir(t);
-  const make = () => createRecorder({ runDir: dir, room: "M,TM0,NF#abc123", name: "opus-seat", now: fixedNow });
+  const make = () => createRecorder({ runDir: dir, room: "M,TM0,NF#abc123", name: "opus-seat" });
   const first = make();
   first.claim();
   await first.checkpoint({ started: true, duel: 2 });
@@ -124,7 +128,7 @@ test("a resumed seat cuts off a result line a hard stop left unfinished, so its 
 
 test("a resumed seat keeps a whole last result line that lost only its newline", async (t) => {
   const dir = await runDir(t);
-  const make = () => createRecorder({ runDir: dir, room: "M,TM0,NF#abc123", name: "opus-seat", now: fixedNow });
+  const make = () => createRecorder({ runDir: dir, room: "M,TM0,NF#abc123", name: "opus-seat" });
   const first = make();
   first.claim();
   await first.checkpoint({ started: true, duel: 2 });
@@ -170,19 +174,20 @@ test("a resumed seat numbers replays on from the highest one, past a gap", async
 
 test("session capture stores each packet with its millisecond offset and full bytes", async (t) => {
   const dir = await runDir(t);
-  let clock = 1000;
-  const recorder = createRecorder({ runDir: dir, room: "M,TM0,NF#cap", name: "seat", capture: true, monotonic: () => clock });
+  const recorder = createRecorder({ runDir: dir, room: "M,TM0,NF#cap", name: "seat", capture: true });
   recorder.startCapture();
-  clock = 1250;
+  await delay(30);
   recorder.packet(Buffer.from([2, 0, 0x19, 7]));
-  clock = 1300;
+  await delay(30);
   recorder.packet(Buffer.from([1, 0, 0x20]));
   await recorder.close();
+  // Each record: u32 milliseconds since the capture started, u16 length, the packet.
   const bytes = await readFile(join(dir, "cap", "seat", "session.bin"));
-  assert.deepEqual([...bytes], [
-    250, 0, 0, 0, 4, 0, 2, 0, 0x19, 7,
-    44, 1, 0, 0, 3, 0, 1, 0, 0x20,
-  ]);
+  assert.equal(bytes.length, 19);
+  const [first, second] = [bytes.readUInt32LE(0), bytes.readUInt32LE(10)];
+  assert.ok(first >= 29 && second >= first + 29, `offsets ${first} and ${second} ms`);
+  assert.deepEqual([...bytes.subarray(4, 10)], [4, 0, 2, 0, 0x19, 7]);
+  assert.deepEqual([...bytes.subarray(14)], [3, 0, 1, 0, 0x20]);
 });
 
 test("without capture no session file is created", async (t) => {

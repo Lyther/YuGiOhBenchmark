@@ -3,10 +3,7 @@ import test from "node:test";
 
 import { OcgcoreCommonConstants as C } from "ygopro-msg-encode";
 
-import { cardName, phaseLabel, positionLabel, zoneLabel } from "../../src/game/labels.js";
-import { fixtureCatalog } from "../helpers/fixture-catalog.js";
-
-const catalog = await fixtureCatalog();
+import { phaseLabel, positionLabel, zoneLabel } from "../../src/game/labels.js";
 
 test("zones are named from the reader's side, with extra monster and field zones spelled out", () => {
   assert.equal(zoneLabel({ side: "me", zone: "monster", index: 2 }), "your M3");
@@ -39,10 +36,4 @@ test("phases read like the game client", () => {
   assert.equal(phaseLabel(C.PHASE_MAIN2), "Main Phase 2");
   assert.equal(phaseLabel(C.PHASE_END), "End Phase");
   assert.equal(phaseLabel(0), "before the first phase");
-});
-
-test("card names come from the catalog, with a visible fallback", () => {
-  assert.equal(cardName(89631139, catalog), "Blue-Eyes White Dragon");
-  assert.equal(cardName(0, catalog), "face-down card");
-  assert.equal(cardName(424242, catalog), "#424242 (no local text)");
 });

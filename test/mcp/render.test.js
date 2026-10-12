@@ -6,6 +6,18 @@ import { fixtureCatalog } from "../helpers/fixture-catalog.js";
 
 const catalog = await fixtureCatalog();
 
+// SUBSTITUTE_JUSTIFICATION
+// - substitute: the hand-built SeatView DTOs (deckView, duelView and the views
+//   the tests derive from them).
+// - replaces: the views the seat builds during a live duel.
+// - necessity: each test pins the exact text of one layout rule (zones, chain
+//   links, counters, materials, targets, scales, folded auto-passes, quoted
+//   chat). A real duel rarely holds those shapes, let alone together, and the
+//   text is a pure function of the DTO.
+// - proof-limit: diagnostic of the text layout only, not of whether the seat
+//   builds the right DTO.
+// - real-proof: the views the agents read in the 2026-10-12 match, kept in
+//   their transcripts (docs/status.md).
 const deckView = {
   phase: "deck", room: "M,TM0,NF#abc123", you: { name: "opus-seat", host: false }, opponent: null,
   match: { duel: 0, score: { me: 0, opponent: 0, draws: 0 } }, board: null, boardVersion: null, events: [],

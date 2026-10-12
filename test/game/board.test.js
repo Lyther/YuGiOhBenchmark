@@ -395,7 +395,10 @@ function zoneMismatches(board, { player, location, cards }) {
   return live.map((query, index) => cardMismatch(list[index], query)).filter(Boolean);
 }
 
-test("the board agrees with every zone the server reported in a real agent match", async () => {
+// Every report in each capture: MSG_UPDATE_DATA and MSG_UPDATE_CARD.
+const REPORTS = { "match-claude": 1775, "match-codex": 1775 };
+
+test("the board agrees with every zone and card the server reported in a real agent match", async () => {
   const catalog = await fixtureCatalog();
   for (const name of ["match-claude", "match-codex"]) {
     let board = null;
@@ -410,10 +413,14 @@ test("the board agrees with every zone the server reported in a real agent match
       if (msg instanceof YGOProMsgUpdateData) {
         checks += 1;
         mismatches.push(...zoneMismatches(board, msg).map((text) => `turn ${board.turn}, location ${msg.location}: ${text}`));
+      } else if (msg instanceof YGOProMsgUpdateCard) {
+        checks += 1;
+        const mismatch = cardMismatch(cardAt(board, msg.controller, msg.location, msg.sequence), msg.card);
+        if (mismatch) mismatches.push(`turn ${board.turn}, card ${msg.location}/${msg.sequence}: ${mismatch}`);
       }
       board = applyBoard(board, msg, { catalog });
     }
-    assert.ok(checks > 1000, `${name}: ${checks} zones checked`);
+    assert.equal(checks, REPORTS[name], `${name}: zone and card reports checked`);
     assert.deepEqual(mismatches, [], name);
   }
 });

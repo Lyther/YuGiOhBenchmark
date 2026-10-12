@@ -12,8 +12,9 @@ import { parseServerPacket } from "../../src/protocol/packets.js";
 //   states; normal live play cannot guarantee this complete set of cases.
 // - proof-limit: codec round trips can share a codec defect. Independent byte
 //   vectors test that risk, but neither kind qualifies a live duel.
-// - real-proof: npm run smoke covers the lobby/surrender path; normal duel
-//   captures and accepted gameplay responses remain P1.11/P1.12.
+// - real-proof: npm run smoke covers the lobby/surrender path; the 2026-10-12
+//   agent match covered normal duels and accepted gameplay responses
+//   (docs/status.md).
 export function gameMessage(MessageClass, fields) {
   const message = Object.assign(new MessageClass(), fields);
   const packet = new YGOProStocGameMsg();

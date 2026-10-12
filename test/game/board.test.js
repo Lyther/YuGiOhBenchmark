@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -37,6 +36,7 @@ import {
 import { applyBoard, cardAt, cardCode, createBoard } from "../../src/game/board.js";
 import { parseServerPacket } from "../../src/protocol/packets.js";
 import { fixtureCatalog } from "../helpers/fixture-catalog.js";
+import { readSession } from "../helpers/sessions.js";
 import { gameMessage } from "../helpers/wire.js";
 
 const BLUE_EYES = 89631139;
@@ -310,13 +310,10 @@ test("the reducer is pure: input boards are untouched and unrelated messages cha
 // Both seats of the first agent match, room M,TM0,NF#am866b8d5a on 2339
 // (fixtures/sessions/README.md): three duels, and the first player changes.
 async function capturedMessages(name) {
-  const bytes = await readFile(new URL(`../fixtures/sessions/${name}.bin`, import.meta.url));
   const messages = [];
-  for (let offset = 0; offset < bytes.length;) {
-    const length = bytes.readUInt16LE(offset + 4);
-    const { message } = parseServerPacket(bytes.subarray(offset + 6, offset + 6 + length));
+  for (const { packet } of await readSession(name)) {
+    const { message } = parseServerPacket(packet);
     if (message instanceof YGOProStocGameMsg) messages.push(message.msg);
-    offset += 6 + length;
   }
   return messages;
 }

@@ -11,7 +11,8 @@ import { parseServerPacket } from "../../src/protocol/packets.js";
 //   also need an explicit driver to replay their original order.
 // - proof-limit: all uses, including ordinary lobby cases, are diagnostic;
 //   this is not proof of interoperability or server acceptance of responses.
-// - real-proof: npm run smoke; full agent gameplay remains P1.11/P2.2.
+// - real-proof: npm run smoke, and the 2026-10-12 agent match on 2339
+//   (docs/status.md).
 export function createLink() {
   const link = {
     connects: [],

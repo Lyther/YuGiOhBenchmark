@@ -14,20 +14,10 @@ import { createSeat } from "../../src/seat/controller.js";
 import { createRecorder } from "../../src/seat/record.js";
 import { fixtureCatalog } from "../helpers/fixture-catalog.js";
 import { createLink } from "../helpers/link.js";
+import { readSession } from "../helpers/sessions.js";
 
 const catalog = await fixtureCatalog();
 const ROOM = "M,TM0,NF#smc1c37f09";
-
-async function records(name) {
-  const bytes = await readFile(new URL(`../fixtures/sessions/${name}.bin`, import.meta.url));
-  const packets = [];
-  for (let offset = 0; offset < bytes.length;) {
-    const length = bytes.readUInt16LE(offset + 4);
-    packets.push({ ms: bytes.readUInt32LE(offset), packet: bytes.subarray(offset + 6, offset + 6 + length) });
-    offset += 6 + length;
-  }
-  return packets;
-}
 
 // The smoke run's answers: fixed lobby answers, surrender at a duel prompt.
 function act(seat, label) {
@@ -50,7 +40,7 @@ async function replay(t, label) {
   });
   let pending = act(seat, label);
   await tick();
-  for (const { packet } of await records(`smoke-${label}`)) {
+  for (const { packet } of await readSession(`smoke-${label}`)) {
     link.deliver(packet);
     if (seat.snapshot().prompt && pending) {
       await pending;
@@ -65,7 +55,7 @@ async function replay(t, label) {
 
 test("every packet of both captured smoke sessions parses with the codec", async () => {
   for (const name of ["smoke-a", "smoke-b"]) {
-    const packets = await records(name);
+    const packets = await readSession(name);
     assert.ok(packets.length > 100, `${name} has ${packets.length} packets`);
     let replays = 0;
     for (const { packet } of packets) {
@@ -119,7 +109,7 @@ function probeAct(seat, { duel, side }) {
 async function feed(seat, link, name, plan) {
   let pending = probeAct(seat, plan);
   await tick();
-  for (const { packet } of await records(name)) {
+  for (const { packet } of await readSession(name)) {
     link.deliver(packet);
     if (seat.snapshot().prompt && pending) {
       await pending;

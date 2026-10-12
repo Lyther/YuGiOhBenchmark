@@ -18,7 +18,7 @@ Last updated: 2026-10-07
 
   There is no HTTP or RPC surface.
 - **Canonical sources.** The code now exists, so each fact has one source in code:
-  - tool inputs: the zod schemas in `src/mcp/tools.js`, with `test/mcp/tools.test.js` snapshotting `tools/list` so contract changes show up in review;
+  - tool inputs: the zod schemas in `src/mcp/tools.js`, with `spec/tools.test.js` snapshotting `tools/list` so contract changes show up in review;
   - DTO mapping: `src/seat/view.js`;
   - file formats: `src/seat/record.js`;
   - environment: `src/config.js`;

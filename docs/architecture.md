@@ -268,7 +268,7 @@ YuGiOhBenchmark/
       cards.js                                         - IMPLEMENTED: `npm run cards`; runs cards/sources.js refresh, prints what changed and the catalog counts.
       probe.js                                         - VERIFIED_EXISTING: `npm run probe`; join a room, print lobby JSON, leave; owns describeMessage.
     config.js                                          - VERIFIED_EXISTING: parse and validate YGO_* into a frozen object; owns defaults and limits; reads env only; config.test.js.
-    log.js                                             - VERIFIED_EXISTING: pino bound to fd 2; log.test.js and tools.test.js check that stdout carries only JSON-RPC.
+    log.js                                             - VERIFIED_EXISTING: pino bound to fd 2; log.test.js and spec/tools.test.js check that stdout carries only JSON-RPC.
     protocol/
       framing.js                                       - VERIFIED_EXISTING: uint16 length-prefixed framer; rejects zero-length frames; pure; protocol/framing.test.js.
       packets.js                                       - IMPLEMENTED: every CTOS builder the seat sends and STOC parse returning {message, raw}; owns CLIENT_VERSION; no sockets; packets.test.js, gameplay-packets.test.js.
@@ -297,24 +297,26 @@ YuGiOhBenchmark/
       deck.js                                          - IMPLEMENTED: pure working-deck model; YDK/ydke/deck-code import and export; edits in import, clear, remove, add, move order; no legality checks; deck.test.js.
     mcp/
       server.js                                        - IMPLEMENTED: McpServer per connection through serveStdio (both protocol eras); logs each call's name, duration and result size; no game logic.
-      tools.js                                         - IMPLEMENTED: the eight tools with zod input schemas, error mapping and the anthropic/maxResultSizeChars _meta; argument mapping only; tools.test.js.
+      tools.js                                         - IMPLEMENTED: the eight tools with zod input schemas, error mapping and the anthropic/maxResultSizeChars _meta; argument mapping only; spec/tools.test.js.
       render.js                                        - IMPLEMENTED: pure DTO → text; folds repeated auto-pass events; never trims; render.test.js.
   spec/
-    seat-entry.test.js                                 - GREEN: real MCP entry contract against the real seat; needs `npm run cards`; run separately.
+    seat-entry.test.js                                 - GREEN: real MCP entry contract against the real seat; `npm run spec`, after `npm run cards`.
+    tools.test.js                                      - GREEN: the tool list, deck startup, card lookups and deck tools of the real seat over stdio MCP, on the downloaded cards.
+    catalog.test.js, deck.test.js                      - GREEN: card vocabulary, strings and names, deck placement and edits, on the downloaded cards.
     upstream-msg-encode.test.js                        - RED on purpose: the four codec defects of D-02, for the upstream report.
   docs/upstream/ygopro-msg-encode.md                   - Prepared upstream report; filing needs the owner's go-ahead (P3.2).
   test/
     core-contract.test.js, log.test.js, config.test.js - VERIFIED_EXISTING core tests.
     protocol/                                          - framing, packets and gameplay-packets tests (every CTOS builder parsed back by the codec).
     net/connection.test.js                             - VERIFIED_EXISTING: real local TCP peer.
-    cards/                                             - catalog (fixture CDB built in-test, layering, first-edition pack), sources, strings-conf.
-    deck/deck.test.js                                  - round trips, sample deck, placement, edits and their errors.
+    cards/                                             - catalog (names, search, layering, missing sources and first-edition packs on a CDB built in-test), sources (real CDBs from a loopback origin), strings-conf.
+    deck/deck.test.js                                  - round trips, sample deck, import formats and edits that cannot apply.
     game/                                              - board, events, labels and prompts tests from real encoded messages.
-    seat/                                              - controller (connection double), record, view, sessions (real captures replayed).
-    mcp/                                               - render, and tools against the real seat process over stdio MCP.
-    helpers/                                           - fixture catalog, codec wire helpers, the connection double.
+    seat/                                              - controller (connection double; a real TCP server where nothing may be sent), record, view, sessions (real captures replayed).
+    mcp/                                               - render.
+    helpers/                                           - fixture catalog, codec wire helpers, the connection double, the capture reader.
     fixtures/
-      sessions/                                        - raw STOC captures (session.bin) from live smoke runs; README says where they came from.
+      sessions/                                        - raw STOC captures (session.bin) from live smoke runs and the first agent match; README says where they came from.
       cards.json                                       - real en-US rows and strings from which tests build their card set.
   data/cards/                                          - Local card data written by `npm run cards`, plus optional first-edition/*.ypk packs; gitignored.
   runs/                                                - Run folders written by seats; gitignored.
@@ -408,8 +410,8 @@ The full schemas, DTOs and examples are in [contracts.md](contracts.md). The rul
 - **Q-04** (zeroed opponent codes). Proof: `prompts.test.js` builds a `SELECT_CARD` with an opponent face-up candidate whose code is 0 and asserts the label is the card's name from the board.
 - **Q-05** (long opponent turn). Proof: in the first two-agent match, the seat logs show `wait` returning at the budget with no dropped events (event sequence numbers are contiguous in the agent transcript).
 - **Encoding fidelity.** `prompts.test.js` checks every response type's bytes against the stock-client layout (D-02).
-- **Stdout purity.** `tools.test.js` asserts every stdout line parses as JSON-RPC.
-- **Tool list.** `tools.test.js` snapshots the registered tool names and schemas, so a change shows up in review.
+- **Stdout purity.** `spec/tools.test.js` asserts every stdout line parses as JSON-RPC.
+- **Tool list.** `spec/tools.test.js` snapshots the registered tool names and schemas, so a change shows up in review.
 - **No event loss.** `view.test.js` delivers a long backlog over many `wait` calls and checks that every event arrives exactly once, in order.
 - **Complete record at match end.** `controller.test.js` checks that `ended` is reported only after the replays arrive, including after a one-duel match.
 - **Smoke.** `npm run smoke` exits 0. It is a diagnostic to run when the lobby, side or end path changes, not a release gate.
@@ -506,7 +508,7 @@ The full schemas, DTOs and examples are in [contracts.md](contracts.md). The rul
 - **Prompt coverage gaps.** Impact: an unseen message family stalls a duel. Mitigation: `unreadable` events, loud logs, per-type tests, captured sessions. Trigger: any `unreadable` event in a live run. Next proof: agent matches with decks that use Xyz, Link, Pendulum and counters; each gap found becomes a fix plus a test from its captured bytes.
 - **Board drift.** Impact: wrong labels or stats mislead the model. Mitigation: zones are rebuilt from `UPDATE_DATA`; the reducer has focused diagnostic regressions. Trigger: a mismatch between the board and the next `UPDATE_DATA`. Normal live-duel capture comparison remains P1.12; there is no runtime comparison gate.
 - **Library defects beyond D-02.** Impact: wrong response bytes or misparsed messages. The library is young (42 versions since February), and Neos reverted its adoption for reasons unknown. Mitigation: byte-layout tests for every prompt type against the stock client; P1.12 parses every captured live packet; fixes reported upstream. Trigger: `MSG_RETRY` after a well-formed answer, or any `unreadable` event.
-- **MCP SDK v2 churn.** Impact: a breaking change on upgrade. Mitigation: exact pin; `tools.test.js`. Trigger: a runtime handshake failure or a needed fix only in a newer major.
+- **MCP SDK v2 churn.** Impact: a breaking change on upgrade. Mitigation: exact pin; `spec/tools.test.js`. Trigger: a runtime handshake failure or a needed fix only in a newer major.
 - **Side Deck time limit.** srvpro on 2339 gives 3 minutes to side. Impact: a slow model could be kicked between duels. Mitigation: the server's announcement reaches the model as a server event, and the task prompt says so. Trigger: a kick after `CHANGE_SIDE` in an agent match.
 - **Unknown 2339 settings** (heartbeat). Impact: kicks. Mitigation: keepalives are confirmed on receipt. No `TIME_LIMIT` packet appeared in the smoke runs. Trigger: a kick or a disconnect during a long think. The reconnect hold is measured: 2339 kept a dropped seat for 298 s, then closed the other seat's socket without `MSG_WIN` (2026-10-08).
 - **Away from the match.** Impact: a duel that ends while a seat is away (the opponent surrendered) has no result for that seat, since srvpro resends no `MSG_WIN` and sends no score; a seat that never returns leaves the opponent waiting up to the hold, with no result. Mitigation: rejoins take seconds; the records say `unknown`, `interrupted` or `aborted` instead of inventing a result, and an `unknown` duel never counts as a draw. Trigger: an `unknown`, `interrupted` or `aborted` line in an agent match.

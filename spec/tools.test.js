@@ -9,17 +9,14 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 
-import { writeFixtureCards } from "../helpers/fixture-catalog.js";
-
-const ROOT = fileURLToPath(new URL("../..", import.meta.url));
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SEAT = join(ROOT, "src/bin/seat.js");
 const DECK = join(ROOT, "decks/sample.ydk");
 
-// The real seat process over real stdio MCP, offline: no tool here submits a
-// deck, so no socket is opened (AD-04). Cards come from the fixture set.
+// The real seat process over real stdio MCP, with the card data `npm run cards`
+// downloaded. No tool here submits a deck, so no socket is opened (AD-04).
 async function startSeat(t) {
   const dir = await mkdtemp(join(tmpdir(), "ygo-tools-"));
-  await writeFixtureCards(join(dir, "cards"));
   const stdout = [];
   const onSpawn = ({ process: child }) => child.once("spawn", () => {
     if (child.spawnargs.includes(SEAT)) child.stdout.on("data", (chunk) => stdout.push(chunk));
@@ -28,7 +25,7 @@ async function startSeat(t) {
   const transport = new StdioClientTransport({
     command: process.execPath, args: [SEAT], cwd: ROOT, stderr: "pipe",
     env: {
-      YGO_ROOM: "M,TM0,NF#toolstest", YGO_NAME: "tools-seat", YGO_CARDS_DIR: join(dir, "cards"), YGO_RUN_DIR: join(dir, "runs"),
+      YGO_ROOM: "M,TM0,NF#toolstest", YGO_NAME: "tools-seat", YGO_CARDS_DIR: join(ROOT, "data/cards"), YGO_RUN_DIR: join(dir, "runs"),
       YGO_DECK: DECK, YGO_WAIT_MS: "1000", YGO_LOG_LEVEL: "warn", YGO_HOST: "127.0.0.1", YGO_PORT: "9",
     },
   });
@@ -86,20 +83,21 @@ test("the deck loaded from YGO_DECK is offered for submit before any socket open
 
 test("card lookups and searches answer from the local card data", async (t) => {
   const { call, stdout } = await startSeat(t);
-  const byName = await call("card", { name: "decode" });
+  const byName = await call("card", { name: "Decode Talker" });
   assert.match(byName.text, /^Decode Talker \(1861629\)$/m);
+  assert.match((await call("card", { name: "maxx" })).text, /^Maxx "C" \(23434538\)$/m, "a unique prefix");
   const byCode = JSON.parse((await call("card", { code: 89631139, format: "json" })).text);
   assert.equal(byCode.name, "Blue-Eyes White Dragon");
   assert.equal(byCode.strings, undefined);
   const ambiguous = await call("card", { name: "Pot of" });
   assert.equal(ambiguous.isError, true);
-  assert.match(ambiguous.text, /did you mean: Pot of Desires, Pot of Greed/);
+  assert.match(ambiguous.text, /did you mean: Pot of \w/);
   assert.equal((await call("card", {})).isError, true);
   const search = await call("card_search", { kind: "spell" });
-  assert.match(search.text, /^2 cards match; showing 1-2:$/m);
-  const json = JSON.parse((await call("card_search", { types: ["synchro"], format: "json" })).text);
-  assert.deepEqual(json.cards.map((card) => card.code), [44508094]);
-  assert.equal(json.total, 1);
+  assert.match(search.text, /^\d{4,} cards match; showing 1-\d+:$/m);
+  const json = JSON.parse((await call("card_search", { types: ["synchro"], name: "Stardust Dragon", format: "json" })).text);
+  assert.ok(json.cards.some((card) => card.code === 44508094));
+  assert.ok(json.cards.every((card) => card.types.includes("synchro")));
   const lines = stdout().split("\n").filter((line) => line.trim());
   assert.ok(lines.length > 0);
   for (const line of lines) assert.equal(JSON.parse(line).jsonrpc, "2.0", "stdout carries only JSON-RPC");
@@ -116,7 +114,7 @@ test("deck tools show, edit and import the working deck that the next submit sen
   assert.match((await call("wait")).text, /Main 39, Extra 2, Side 8/, "the deck prompt follows the working deck");
   const unknown = await call("deck_edit", { add: [{ card: "Pot of" }] });
   assert.equal(unknown.isError, true);
-  assert.match(unknown.text, /did you mean: Pot of Desires, Pot of Greed/);
+  assert.match(unknown.text, /did you mean: Pot of \w/);
   assert.match((await call("deck_show")).text, /Main 39/, "a rejected edit changes nothing");
   const imported = JSON.parse((await call("deck_edit", { import: "ydke://o6lXBaOpVwVKcEkD!viOnAg==!ryPeAA==!", format: "json" })).text);
   assert.deepEqual(imported.counts, { main: 3, extra: 1, side: 1 });

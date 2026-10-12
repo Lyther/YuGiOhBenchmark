@@ -18,7 +18,7 @@ Last updated: 2026-10-07
 
 ## Current Implementation
 
-Done on 2026-10-07: P1.1–P1.10 and P2.1, plus P3.2's prepared reports. The [transport/probe core](specs/core.md) came first; the rest was built test first against the [remaining-work spec](specs/remaining.md). The seat ran two live smoke matches on 2339 and connected to Claude Code and Codex. What is left needs agent matches: P1.11, P2.2 and P2.3, with P1.12's zone checks waiting on a real duel capture. See [status](status.md).
+Done on 2026-10-07: P1.1–P1.10 and P2.1, plus P3.2's prepared reports. The [transport/probe core](specs/core.md) came first; the rest was built test first against the [remaining-work spec](specs/remaining.md). The seat ran two live smoke matches on 2339 and connected to Claude Code and Codex. The first agent match ran on 2026-10-12: P1.11 and P2.2 wait only on opening one of its replays in KoishiPro, and P2.3 and the rest of P1.12 remain. See [status](status.md).
 
 ## Phase 0: Decision Closure
 
@@ -145,13 +145,14 @@ Exit gate:
     - Two agents, a fresh room, `YGO_DECK` and `YGO_CAPTURE=1` for each, and the operator observing in KoishiPro. Fix any `unreadable` event, retry loop or timeout found, then rerun.
   - Acceptance evidence: both run folders hold a `match` line, one replay per duel played and a `.ydk` per duel; one replay opens in KoishiPro; the transcripts show `wait` returning within budget during long opponent turns, with contiguous event numbers (Q-05); the captured sessions are committed.
   - Dependencies: P1.10.
+  - Run on 2026-10-12 in `M,TM0,NF#am866b8d5a` ([status](status.md)): every check passed except opening a replay in KoishiPro, which needs the operator.
 
 - [ ] `P1.12` Offline replay of captured matches.
   - Files: `test/seat/controller.test.js`, `test/protocol/packets.test.js`, `test/game/board.test.js`.
   - Scope: feed the fixtures through parse, the controller and the board, with a recording connection stub that keeps outgoing packets for assertions. It replaces the live connection, so replaying captures is diagnostic and does not replace the live run.
   - Acceptance evidence: every captured STOC packet parses; phases match the live runs; each zone matches the next `UPDATE_DATA` for it, including duels where the first player changes; keepalives and auto-passes appear where the bytes require them.
   - Dependencies: P1.11.
-  - Partly done: `test/seat/sessions.test.js` parses every packet of both smoke captures and replays them through the controller to the live results. The zone checks need an agent match's capture, because the smoke duels end at their first prompt.
+  - Partly done: `test/seat/sessions.test.js` parses every packet of both smoke captures and replays them through the controller to the live results. `test/game/board.test.js` replays both seats' captures of the first agent match and requires every zone the server reported to match the board.
 
 - [x] `P1.13` Resume first (architecture AD-14; supersedes the deferred reconnect).
   - Files: `src/seat/controller.js`, `src/seat/record.js`, `src/game/board.js`, `src/bin/seat.js`, `src/bin/smoke.js`, their tests, `test/fixtures/sessions/rejoin-a-*.bin`.
@@ -178,6 +179,7 @@ Exit gate:
   - Scope: the task prompt asks each agent to build its own deck and allows siding. The recipes are the same as in P1.11.
   - Acceptance evidence: a complete Bo3 in which both agents submitted decks they built and at least one side submission changed a deck; the replays open.
   - Dependencies: P2.1.
+  - The 2026-10-12 match met this except opening the replays: both agents built their decks, and both changed them at side.
 
 - [ ] `P2.3` Measure and tune.
   - Scope: prompts per duel, auto-answers per duel, wait polls, result sizes, and tokens and cost per match from provider billing. Decide the `specount == 0` question and the `YGO_WAIT_MS` default from these numbers.

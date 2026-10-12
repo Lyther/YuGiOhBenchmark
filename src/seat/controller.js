@@ -290,8 +290,11 @@ class Seat {
   // The pending prompt is put away until the duel ends, and given back if it
   // does not end in time.
   #holdPrompt() {
+    const { match, prompt } = this.#state;
+    // A surrender repeated while one is held keeps the prompt held first.
+    const earlier = this.#held?.duel === match.duel ? this.#held.prompt : null;
     clearTimeout(this.#held?.timer);
-    const held = { duel: this.#state.match.duel, prompt: this.#state.prompt };
+    const held = { duel: match.duel, prompt: prompt ?? earlier };
     held.timer = setTimeout(() => this.#surrenderRefused(held), this.#surrenderGraceMs);
     held.timer.unref?.();
     this.#held = held;

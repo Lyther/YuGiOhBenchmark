@@ -939,6 +939,19 @@ test("a surrender the server does not accept gives the pending prompt back", asy
   assert.deepEqual(types(link.take()), [YGOProCtosSurrender, YGOProCtosResponse], "the prompt can still be answered");
 });
 
+test("surrendering again before a refused surrender's prompt comes back keeps that prompt", async (t) => {
+  const { seat, link } = await idlePrompt(t);
+  const held = seat.snapshot().prompt;
+  const first = seat.surrender();
+  await tick();
+  // An opponent's chat line ends the first call before the grace is over.
+  link.deliver(stocPacket(YGOProStocChat, { player_type: 1, msg: "no surrender" }));
+  assert.equal(await first, "chat");
+  const [reason] = await Promise.all([seat.surrender(), delay(200)]);
+  assert.equal(reason, "prompt");
+  assert.equal(seat.snapshot().prompt?.seq, held.seq);
+});
+
 test("a surrender the server accepts gives nothing back after the grace", async (t) => {
   const { seat, link } = await idlePrompt(t);
   const surrendered = seat.surrender();

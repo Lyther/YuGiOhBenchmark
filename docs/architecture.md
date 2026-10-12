@@ -312,7 +312,7 @@ YuGiOhBenchmark/
     cards/                                             - catalog (names, search, layering, missing sources and first-edition packs on a CDB built in-test), sources (real CDBs from a loopback origin), strings-conf.
     deck/deck.test.js                                  - round trips, sample deck, import formats and edits that cannot apply.
     game/                                              - board, events, labels and prompts tests from real encoded messages.
-    seat/                                              - controller (connection double; a real TCP server where nothing may be sent), record, view, sessions (real captures replayed).
+    seat/                                              - controller (connection double; a scripted peer over real TCP for the tests that need no controlled packets), record, view, sessions (real captures replayed).
     mcp/                                               - render.
     helpers/                                           - fixture catalog, codec wire helpers, the connection double, the capture reader.
     fixtures/

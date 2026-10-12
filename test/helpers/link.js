@@ -3,8 +3,9 @@ import { YGOProCtos } from "ygopro-msg-encode";
 import { parseServerPacket } from "../../src/protocol/packets.js";
 
 // SUBSTITUTE_JUSTIFICATION
-// - substitute: createLink in sessions.test.js and controller.test.js, except
-//   the controller's checks that nothing is sent, which use a real TCP server.
+// - substitute: createLink in sessions.test.js and controller.test.js. The
+//   controller tests that need no controlled packets run over real TCP: the
+//   checks that nothing is sent, the one-call rule and a stop mid-match.
 // - replaces: the live network connection, including incoming packet timing.
 // - necessity: every other controller test checks one of these, which 2339
 //   cannot be made to produce on demand: a server error or refusal (VERERROR,
@@ -15,9 +16,6 @@ import { parseServerPacket } from "../../src/protocol/packets.js";
 //   deck edits during a join); or a close or replay at a set time. Their lobby
 //   and duel steps only reach that state. Captured bytes need a driver that
 //   delivers them in their original order.
-// - not necessary: "one blocking call at a time; surrender only in a duel" and
-//   "a seat stopped mid-match does not leave it" use it only to reach a duel;
-//   a scripted peer over real TCP would serve them too.
 // - proof-limit: every use is diagnostic; none proves interoperability or that
 //   the server accepts the seat's responses.
 // - real-proof: npm run smoke, and the 2026-10-12 agent match on 2339

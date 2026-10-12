@@ -13,6 +13,7 @@ import {
   DeckErrorType,
   ErrorMessageType,
   PlayerChangeState,
+  YGOProCtos,
   YGOProCtosChat,
   YGOProCtosHandResult,
   YGOProCtosHsReady,
@@ -53,6 +54,7 @@ import {
 import { AnswerError } from "../../src/game/prompts/index.js";
 import { createLogger } from "../../src/log.js";
 import { openConnection } from "../../src/net/connection.js";
+import { PacketFramer } from "../../src/protocol/framing.js";
 import { createSeat, SeatError } from "../../src/seat/controller.js";
 import { createRecorder } from "../../src/seat/record.js";
 import { fixtureCatalog } from "../helpers/fixture-catalog.js";
@@ -132,11 +134,63 @@ async function joinRoom(seat, link) {
   await pending;
 }
 
-async function startDuel(seat, link, me = 0) {
-  link.deliver(gamePacket(YGOProMsgStart, {
+function startPacket(me = 0) {
+  return gamePacket(YGOProMsgStart, {
     playerType: me, duelRule: 5, startLp0: 8000, startLp1: 8000,
     player0: { deckCount: 35, extraCount: 1 }, player1: { deckCount: 35, extraCount: 15 },
-  }));
+  });
+}
+
+async function startDuel(seat, link, me = 0) {
+  link.deliver(startPacket(me));
+}
+
+// A scripted server over real TCP: the seat's real connection code reads what
+// the test writes, and the server frames what the seat sends.
+async function tcpPeer(t) {
+  const sockets = [];
+  const sent = [];
+  const server = net.createServer((socket) => {
+    sockets.push(socket);
+    const framer = new PacketFramer();
+    socket.on("data", (chunk) => sent.push(...framer.push(chunk).map((packet) => YGOProCtos.getInstanceFromPayload(packet))));
+    socket.on("error", () => socket.destroy());
+  }).listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => {
+    for (const socket of sockets) socket.destroy();
+    return new Promise((resolve) => server.close(resolve));
+  });
+  const { port } = server.address();
+  return {
+    sent,
+    socket: () => sockets.at(-1),
+    connect: (options) => openConnection({ ...options, host: "127.0.0.1", port }),
+    deliver: (...packets) => sockets.at(-1).write(Buffer.concat(packets)),
+    take: () => sent.splice(0),
+    async until(check) {
+      for (let tries = 0; !check() && tries < 400; tries += 1) await delay(5);
+      assert.ok(check(), "the awaited state arrived over TCP");
+    },
+  };
+}
+
+// joinRoom over the TCP peer: lobby packets go out once the seat has joined.
+async function joinOverTcp(seat, peer) {
+  const pending = seat.answer({ submit: true });
+  await peer.until(() => peer.sent.some((packet) => packet instanceof YGOProCtosJoinGame));
+  peer.deliver(
+    stocPacket(YGOProStocJoinGame, { info: HOST_INFO }),
+    stocPacket(YGOProStocTypeChange, { type: 0x10 | 0 }),
+    stocPacket(YGOProStocHsPlayerEnter, { name: "gpt-seat", pos: 1 }),
+    stocPacket(YGOProStocHsPlayerChange, status(0, PlayerChangeState.READY)),
+    stocPacket(YGOProStocHsPlayerChange, status(1, PlayerChangeState.READY)),
+    stocPacket(YGOProStocDuelStart),
+    stocPacket(YGOProStocSelectHand),
+  );
+  await pending;
+  // The host's start is the last lobby packet; after it nothing is in flight.
+  await peer.until(() => peer.sent.some((packet) => packet instanceof YGOProCtosHsStart));
 }
 
 function idle(player = 0) {
@@ -864,14 +918,16 @@ test("a match that ends before the seat saw its last duel end reports that duel 
 });
 
 test("a seat stopped mid-match does not leave it: srvpro keeps the seat for a resume", async (t) => {
-  const { seat, link, folder } = await setup(t);
-  await joinRoom(seat, link);
-  await startDuel(seat, link);
-  link.deliver(gamePacket(YGOProMsgNewTurn, { player: 0 }));
-  link.take();
+  const peer = await tcpPeer(t);
+  const { seat, folder } = await setup(t, { connect: peer.connect });
+  await joinOverTcp(seat, peer);
+  peer.deliver(startPacket(), gamePacket(YGOProMsgNewTurn, { player: 0 }));
+  await peer.until(() => seat.snapshot().board?.turn === 1);
+  peer.take();
+  const closed = once(peer.socket(), "close");
   await seat.close("stdin closed");
-  assert.deepEqual(link.take(), [], "LEAVE_GAME would forfeit a match the server still holds");
-  assert.equal(link.open, false);
+  await closed;
+  assert.deepEqual(peer.take(), [], "LEAVE_GAME would forfeit a match the server still holds");
   const lines = await results(folder);
   assert.deepEqual(lines.map(({ type, phase, duel, turn, reason }) => [type, phase, duel, turn, reason]), [["interrupted", "duel", 1, 1, "stdin closed"]]);
 });
@@ -916,21 +972,21 @@ test("a join sends the deck the model submitted, not edits made since", async (t
 });
 
 test("one blocking call at a time; surrender only in a duel", async (t) => {
-  const { seat, link } = await setup(t);
-  await joinRoom(seat, link);
+  const peer = await tcpPeer(t);
+  const { seat } = await setup(t, { connect: peer.connect });
+  await joinOverTcp(seat, peer);
   assert.throws(() => seat.surrender(), SeatError, "not in the duel phase yet");
   const first = seat.answer({ choose: [1] });
   await tick();
   await assert.rejects(seat.wait(), /already waiting/);
-  await startDuel(seat, link);
-  link.deliver(idle(0));
+  peer.deliver(startPacket(), idle(0));
   assert.equal(await first, "prompt");
-  link.take();
+  await peer.until(() => peer.sent.some((packet) => packet instanceof YGOProCtosHandResult));
+  peer.take();
   const surrendered = seat.surrender();
-  await tick();
-  assert.deepEqual(types(link.take()), [YGOProCtosSurrender]);
-  link.deliver(gamePacket(YGOProMsgWin, { player: 1, type: 0 }));
-  link.deliver(stocPacket(YGOProStocChangeSide));
+  await peer.until(() => peer.sent.some((packet) => packet instanceof YGOProCtosSurrender));
+  assert.deepEqual(types(peer.take()), [YGOProCtosSurrender]);
+  peer.deliver(gamePacket(YGOProMsgWin, { player: 1, type: 0 }), stocPacket(YGOProStocChangeSide));
   assert.equal(await surrendered, "prompt");
 });
 

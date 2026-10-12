@@ -126,7 +126,7 @@ IDs come from the concept. `D-` items are derived from research done for this do
 
     A bounded search does not prove that no such client exists. It is enough to choose building the seat on the codec.
   - Library maturity: `ygopro-msg-encode` has had 42 versions since 2026-02. Neos adopted it and reverted the same day (2026-04-30, reason unknown). Its `MSG_RANDOM_SELECTED` and `MSG_BECOME_TARGET` fields are typed differently from the C++ client, but with the same wire width.
-  - Card data: the four `mycard/ygopro-database` locale files return 200 from GitHub raw; both CDBs hold 15,019 cards; there is no license file. MyCard super-pre serves `test-release.cdb` (96 cards), `test-update.cdb` (377 rows) and `test-strings.conf` individually under `cdn02.moecube.com:444/ygopro-super-pre/data/`, byte-identical to the 18 MB `.ypk`, which is updated almost daily. The text is zh-CN only. `ElderLich/TransSuperpre` publishes English versions of the same IDs daily, with no license.
+  - Card data: the four `mycard/ygopro-database` locale files return 200 from GitHub raw; both CDBs hold 15,019 cards; there is no license file. MyCard super-pre serves `test-release.cdb` (96 cards), `test-update.cdb` (377 rows) and `test-strings.conf` individually under `cdn02.moecube.com:444/ygopro-super-pre/data/`, byte-identical to the 18 MB `.ypk`, which is updated almost daily. The text is zh-CN only. `ElderLich/Pre-Release-Translations` publishes English versions of the same IDs several times a day, with no license; it replaced the maintainer's `TransSuperpre`, retired on 2026-10-11.
   - Smoke test on that set: the live en-US `cards.cdb` (8 MB) opens through `ygopro-cdb-encode`; code lookup and filter search work, with filter keys being CDB column names (`atk`, `def`, `race`, `attribute`). A `ydke://` round trip through `ygopro-deck-encode` is exact. The en-US `strings.conf` carries 535 `!system` strings plus the `!victory` texts.
 - Source facts used here: E-04 to E-13 from the concept, plus D-02 to D-05 above. One more: ocgcore re-checks declared card names (`is_declarable`, [source](https://github.com/Fluorohydride/ygopro-core/blob/e5ce3178a7d78d3d31de0ef40993cb83b34772ce/playerop.cpp#L1000-L1020)), so the seat sends the model's declaration as given.
 
@@ -468,7 +468,7 @@ The full schemas, DTOs and examples are in [contracts.md](contracts.md). The rul
   - Decision: `npm run cards` fetches these individual files (URLs in contracts.md Card Data Inputs):
     - MyCard `ygopro-database` en-US and zh-CN;
     - MyCard super-pre `data/`;
-    - TransSuperpre English base files.
+    - Pre-Release-Translations English base files.
 
     The catalog merges them so that English wins and Chinese fills gaps.
   - Consequences: text may lag the server for brand-new cards (shown as `no local text`), and community translations can be wrong (the card info says which source it used). The sources carry no license, so the data stays local and is never committed or redistributed.

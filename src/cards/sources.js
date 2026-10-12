@@ -14,7 +14,7 @@ export const CARD_SOURCES = Object.freeze([
   },
   {
     name: "super-pre-en",
-    base: "https://raw.githubusercontent.com/ElderLich/TransSuperpre/main/EN/Base%20Files/",
+    base: "https://raw.githubusercontent.com/ElderLich/Pre-Release-Translations/main/EN/Base%20Files/",
     files: ["test-release.cdb", "test-strings.conf"],
   },
   {

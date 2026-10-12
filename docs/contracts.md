@@ -348,7 +348,7 @@ An invalid value stops the process at start, with the variable named on stderr. 
 en-US/cards.cdb, en-US/strings.conf
     https://raw.githubusercontent.com/mycard/ygopro-database/master/locales/en-US/{cards.cdb,strings.conf}
 super-pre-en/test-release.cdb, super-pre-en/test-strings.conf
-    https://raw.githubusercontent.com/ElderLich/TransSuperpre/main/EN/Base%20Files/{test-release.cdb,test-strings.conf}
+    https://raw.githubusercontent.com/ElderLich/Pre-Release-Translations/main/EN/Base%20Files/{test-release.cdb,test-strings.conf}
 super-pre/test-release.cdb, super-pre/test-update.cdb, super-pre/test-strings.conf
     https://cdn02.moecube.com:444/ygopro-super-pre/data/{test-release.cdb,test-update.cdb,test-strings.conf}
 zh-CN/cards.cdb, zh-CN/strings.conf

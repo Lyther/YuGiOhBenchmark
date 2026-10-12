@@ -59,12 +59,13 @@ A peer review of `a48855a` found two more defects, each fixed with a test that f
   - Claude's run took 26 minutes, 162 tool calls and $7.78. Codex used 6.44M input tokens, 6.26M of them cached.
 - **Victory Dragon (2026-10-12).** The operator reported that 2339 refuses a surrender while the opponent's deck holds Victory Dragon. It accepted all four turn-1 surrenders in `sm63f5f2b9` (both decks held one) and `smdc21e41c` (only the opponent's did), with the Victory Dragon never drawn. After the surrender fix the plain smoke passed in `sm45702d28`.
 
+- **Card sources (2026-10-12).** The English pre-release source moved: its maintainer retired `ElderLich/TransSuperpre` on 2026-10-11 and publishes the same two files in `ElderLich/Pre-Release-Translations`. Before the switch, the new files were checked against MyCard's super-pre data: every card they share has the same ID and the same stats. `npm run cards` then succeeded again, with 105 English pre-release cards, all of them in MyCard's set.
+
 ## Not yet proven
 
 - That the agent match's replays open in KoishiPro: the last check of P1.11 and P2.2.
 - The rest of P1.12: replaying the agent match's captures through the controller to its live phases, keepalives and auto-passes.
 - A surrender refused live: no room on 2339 has refused one yet, so the fix is proven only offline.
-- A complete `npm run cards`: the English pre-release source (ElderLich/TransSuperpre) was retired on 2026-10-11, so the command exits 1. The other three sources still download, and pre-release cards fall back to their Chinese text.
 - Cost per match (P2.3), Gemini CLI, and a 15-minute think (Q-02).
 - A rejoin caused by a live packet fault: only reproduced locally (a malformed `MSG_START` now leaves the seat running) and replayed from captured bytes.
 

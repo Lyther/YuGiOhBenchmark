@@ -55,7 +55,8 @@ export function exportDeck(deck, format) {
   throw new Error(`unknown deck format ${format}; use ydk, ydke or code`);
 }
 
-// The room has no banlist, so a legal deck can hold more copies than a code can.
+// The working deck takes up to 60 copies of a card (the server refuses more than 3),
+// and a deck code holds at most 4, so an export can fail; say why.
 function deckCode(encoded) {
   try {
     return encoded.toEncodedString();

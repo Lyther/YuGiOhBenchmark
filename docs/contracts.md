@@ -187,7 +187,7 @@ Rules shared by all tools:
 - **Input:** `{format?: "text" | "json" | "ydk" | "ydke" | "code"}`.
 - **Result:**
   - `text`/`json`: a DeckView of the working deck.
-  - `ydk`/`ydke`/`code`: the export string, via `ygopro-deck-encode`. A deck code holds at most 4 copies of a card, and the room has no banlist, so a deck with more is refused with that reason (`isError`); `ydk` and `ydke` carry any count.
+  - `ydk`/`ydke`/`code`: the export string, via `ygopro-deck-encode`. A deck code holds at most 4 copies of a card, so a working deck with more (deck edits allow up to 60, though the server refuses more than 3) is refused with that reason (`isError`); `ydk` and `ydke` carry any count.
 
 ### `deck_edit`
 
@@ -357,7 +357,7 @@ zh-CN/cards.cdb, zh-CN/strings.conf
     https://raw.githubusercontent.com/mycard/ygopro-database/master/locales/zh-CN/{cards.cdb,strings.conf}
 ```
 
-- **Merge order.** The catalog merges cards lowest priority first, so later rows replace earlier ones, in two orders. A card's text (name, effect text, strings, and the `source` it names) comes from the highest-priority source that has the code: zh-CN, super-pre (release then update), super-pre-en, en-US. A card's data (alias, type, level, attribute, race, ATK, DEF, scales, link markers and archetype codes) comes from the newest source that has the code, because the server loads its pre-release files over its base data: zh-CN, en-US, super-pre-en, super-pre (release then update). A card in en-US that `test-update.cdb` changes keeps its English text and takes the update's data.
+- **Merge order.** The catalog merges cards lowest priority first, so later rows replace earlier ones, in two orders. A card's text (name, effect text, strings, and the `source` it names) comes from the highest-priority source that has the code: zh-CN, super-pre (release then update), super-pre-en, en-US. A card's data (alias, type, level, attribute, race, ATK, DEF, scales, link markers and archetype codes) follows the server's load order instead, a fixed source order that never looks at file dates: the server loads its pre-release files over its base data, so the last of zh-CN, en-US, super-pre-en, super-pre (release then update) that has the code decides it. A card in en-US that `test-update.cdb` changes keeps its English text and takes the update's data.
 - **Strings.** `strings.conf` files merge the same way. `test-strings.conf` only adds setnames and counters.
 - **Missing files.** A missing en-US set is fatal at seat start. Any other missing set is logged and skipped.
 - **Failed refresh.** Each file is downloaded with a 5-minute timeout and up to three attempts with jittered backoff (server errors only), staged under a temporary name, and renamed into place only after the whole set for that source arrives. A file must also look like what it claims to be: a `.cdb` starts with the SQLite header, a strings file has `!` entries, and nothing is over 64 MiB, counted as the bytes arrive so a body with no length cannot grow past it. That way an error page or captive portal answering 200 cannot replace good data. On failure the previous files stay. At seat start, an unreadable optional database is logged and skipped; an unreadable en-US one stops the seat and names `npm run cards`. Behind an HTTP proxy, run with `NODE_USE_ENV_PROXY=1`.
@@ -378,9 +378,9 @@ zh-CN/cards.cdb, zh-CN/strings.conf
 ```text
 Phase: deck · room M,TM0,NF#abc123 · you: opus-seat
 Prompt 1 · deck
-Build your deck: Main 40–60, Extra ≤15, Side ≤15 (the server checks it). Use card_search, card and deck_edit; deck_show to review.
+Your deck: Main 0, Extra 0, Side 0. The server allows Main 40 to 60 cards, Extra up to 15, Side up to 15, at most 3 copies of a card, and checks the deck when you submit. Submit it to join the room.
 Answer: answer {"submit": true}
-Next: build the deck, then submit.
+Next: Submit your deck: answer {"submit": true}.
 ```
 
 `answer` returning a command prompt (text, abridged):

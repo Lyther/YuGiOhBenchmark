@@ -707,6 +707,8 @@ test("a rejoin the server refuses (seated as an observer, or a different deck) i
     assert.equal(link.open, false, "the refused connection is closed");
     await delay(20);
     assert.equal(link.connects.length, 2, "a refusal is final");
+    // The aborted line is a queued write; closing flushes it, as every other reader here does.
+    await seat.close();
     assert.deepEqual((await results(folder)).map((line) => line.type), ["aborted"]);
   }
 });

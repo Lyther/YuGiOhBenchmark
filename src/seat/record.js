@@ -44,6 +44,11 @@ function readJson(file) {
   }
 }
 
+// The side deadline a stopped seat recorded: {duel, ends} (epoch ms), or null.
+function sideWindow(value) {
+  return Number.isInteger(value?.duel) && Number.isFinite(value?.ends) ? { duel: value.duel, ends: value.ends } : null;
+}
+
 // A hard stop can cut the last line; a line that does not parse is skipped.
 function parseLine(line) {
   try {
@@ -109,7 +114,7 @@ class Recorder {
     // Numbering goes on after the highest replay, past a gap a failed write left.
     const replays = Math.max(0, ...files.map((file) => Number(REPLAY_FILE.exec(file)?.[1] ?? 0)));
     return {
-      started: state.started === true, duel: state.duel ?? 0, turn: state.turn ?? 0,
+      started: state.started === true, duel: state.duel ?? 0, turn: state.turn ?? 0, side: sideWindow(state.side),
       results: lines.filter((line) => line.type === "duel"), decks, replays,
     };
   }
@@ -129,7 +134,7 @@ class Recorder {
     }
     if (found) this.#endLastLine();
     this.#replays = found?.replays ?? 0;
-    this.#seatState = { pid: process.pid, started: found?.started ?? false, duel: found?.duel ?? 0, turn: found?.turn ?? 0 };
+    this.#seatState = { pid: process.pid, started: found?.started ?? false, duel: found?.duel ?? 0, turn: found?.turn ?? 0, side: found?.side ?? null };
     const temp = join(this.folder, `.${STATE_FILE}.tmp`);
     writeFileSync(temp, `${JSON.stringify(this.#seatState)}\n`);
     renameSync(temp, join(this.folder, STATE_FILE));

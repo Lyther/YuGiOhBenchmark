@@ -735,7 +735,7 @@ test("a rejoin dropped before its restore leaves no deadline to abort the next o
 });
 
 // A new seat process taking over the folder that a stopped seat left mid-match.
-async function restart(t, folder) {
+async function restart(t, folder, { now } = {}) {
   const file = join(folder, "seat.json");
   const state = JSON.parse(await readFile(file, "utf8"));
   // The stopped seat's process is gone: a real pid that has exited.
@@ -744,7 +744,7 @@ async function restart(t, folder) {
   const record = createRecorder({ runDir: dirname(dirname(folder)), room: ROOM, name: NAME });
   const seat = createSeat({
     config: { host: "koishi.example", port: 2339, name: NAME, room: ROOM, version: 0x1362, waitMs: 2000 },
-    catalog, deck: { main: [BLUE_EYES], extra: [], side: [] }, record, connect: link.connect, log, rejoinBaseMs: 1,
+    catalog, deck: { main: [BLUE_EYES], extra: [], side: [] }, record, connect: link.connect, log, rejoinBaseMs: 1, now,
   });
   t.after(() => seat.close());
   return { seat, link, state };
@@ -1189,4 +1189,42 @@ test("the deck prompt states the server's deck rules", async (t) => {
   const { text } = seat.snapshot().prompt;
   assert.match(text, /^Your deck: Main 3, Extra 1, Side 1\./);
   assert.match(text, /Main 40 to 60 cards, Extra up to 15, Side up to 15, at most 3 copies of a card/);
+});
+
+// srvpro keeps the timer the first CHANGE_SIDE started through a rejoin; on
+// 2339 a seat that rejoined 62 s into siding was removed at 180 s (sw26294299).
+test("a rejoin while siding keeps the server's side deadline", async (t) => {
+  let clock = 1_000_000;
+  const { seat, link } = await setup(t, { now: () => clock });
+  await joinRoom(seat, link);
+  await playDuel(seat, link, { winner: 0 });
+  link.deliver(stocPacket(YGOProStocChangeSide));
+  assert.equal(await seat.wait(), "prompt");
+  clock += 60_000;
+  link.serverClose();
+  await delay(20);
+  rejoined(link);
+  link.deliver(stocPacket(YGOProStocChangeSide));
+  assert.equal(await seat.wait(), "prompt");
+  assert.equal(seat.snapshot().prompt.kind, "side");
+  assert.equal(seat.sideLeftMs(), 120_000);
+});
+
+test("a seat restarted while siding keeps the server's side deadline", async (t) => {
+  let clock = 1_000_000;
+  const first = await setup(t, { now: () => clock });
+  await joinRoom(first.seat, first.link);
+  await playDuel(first.seat, first.link, { winner: 1 });
+  first.link.deliver(stocPacket(YGOProStocChangeSide));
+  assert.equal(await first.seat.wait(), "prompt");
+  await first.seat.close("stdin closed");
+  clock += 60_000;
+  const { seat, link } = await restart(t, first.folder, { now: () => clock });
+  const resumed = seat.answer({ submit: true });
+  await tick();
+  rejoined(link);
+  link.deliver(stocPacket(YGOProStocChangeSide));
+  assert.equal(await resumed, "prompt");
+  assert.equal(seat.snapshot().prompt.kind, "side");
+  assert.equal(seat.sideLeftMs(), 120_000);
 });

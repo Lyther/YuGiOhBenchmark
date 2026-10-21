@@ -45,7 +45,9 @@ const BUSY = "a call is already waiting; let it return first";
 const REPLAY_GRACE_MS = 15_000;
 // srvpro's side_timeout: 2339 says "3 minutes" when a side deck is due, repeats
 // it as 2 and 1 minute, and at the third minute removes the seat, which loses
-// the match with no reconnect hold (system_kicked). The seat only reports it.
+// the match with no reconnect hold (system_kicked). The timer runs on through a
+// rejoin, so the seat keeps the first deadline, across a restart too. The seat
+// only reports it.
 const SIDE_LIMIT_MS = 180_000;
 // A lost connection is rejoined with backoff 1, 2, 4, 8, 16, 16 s, each with
 // jitter in [0.5, 1.5): about 47 s, inside srvpro's reconnect wait (90 s by
@@ -196,6 +198,7 @@ class Seat {
   #startSent = false;
   #waiter = null;
   #sending = false;
+  #side = null;
   #replayTimer = null;
   #duelsPlayed = 0;
   #replaysReceived = 0;
@@ -229,7 +232,7 @@ class Seat {
       phase: "deck", room: config.room, name: config.name, host: false, opponent: null, opponentReady: false,
       prompt: null, lastPrompt: null, promptSeq: 0, events: [], board: null, hint: null,
       deck: copyDeck(deck), submitted: null, delivered: { event: 0, boardVersion: -1 },
-      match: { duel: 0, results: [], score: { me: 0, opponent: 0, draws: 0 } }, disconnect: null, waiting: null, sideEnds: null,
+      match: { duel: 0, results: [], score: { me: 0, opponent: 0, draws: 0 } }, disconnect: null, waiting: null,
     };
     this.#resumeNote = resumeNote(record.inspect());
     this.#setPrompt(lobbyPrompt("deck", { text: this.#deckText() }));
@@ -249,8 +252,7 @@ class Seat {
 
   // Milliseconds the server still waits for a side deck, or null when none is due.
   sideLeftMs() {
-    const { prompt, sideEnds } = this.#state;
-    return prompt?.kind === "side" && sideEnds !== null ? Math.max(0, sideEnds - this.#now()) : null;
+    return this.#state.prompt?.kind === "side" && this.#side ? Math.max(0, this.#side.ends - this.#now()) : null;
   }
 
   markDelivered({ event, boardVersion }) {
@@ -494,8 +496,9 @@ class Seat {
 
   // A restarted seat continues the match its folder holds (contracts.md
   // Rejoin): results, decks and replay count come back from the folder.
-  #resume({ started, duel, turn, results, decks, replays }) {
+  #resume({ started, duel, turn, side, results, decks, replays }) {
     const { match } = this.#state;
+    this.#side = side;
     match.results = results.map(({ duel: number, result, reason, reasonCode, turns, first }) => ({ duel: number, result, reason, reasonCode, turns, first }));
     match.score = scoreOf(match.results);
     // seat.json names the last duel that started, finished or not.
@@ -876,7 +879,12 @@ class Seat {
     this.#missedDuel();
     this.#sideSubmitted = false;
     this.#state.phase = "side";
-    this.#state.sideEnds = this.#now() + this.#sideLimitMs;
+    // A CHANGE_SIDE resent by a rejoin's restore keeps the deadline it set.
+    const duel = this.#state.match.duel;
+    if (this.#side?.duel !== duel) {
+      this.#side = { duel, ends: this.#now() + this.#sideLimitMs };
+      this.#checkpoint({ side: this.#side });
+    }
     this.#setPrompt(lobbyPrompt("side", { text: this.#sideText() }));
   }
 

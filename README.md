@@ -72,6 +72,7 @@ npm run droid-agent -- --dir /path/to/match01 --label droid --model <model> --ef
 ```
 
 The launcher makes `/path/to/match01/droid/` the agent's working folder and its seat's `YGO_RUN_DIR`. It gives the agent its own Droid home, `/path/to/match01/droid.droid-home/`, holding the seat's MCP entry, the steer hook below and links to your Droid login, and nothing else. Droid reads that home instead of `~/.factory` through `FACTORY_HOME_OVERRIDE`.
+
 - Nothing is added to your own config. Your MCP servers, skills, plugins, hooks and `AGENTS.md` do not reach the agent; Droid's built-in tools and skills do.
 - That variable is undocumented, so the launcher first checks the agent's tool list and stops if any MCP server other than the seat appears.
 - It then runs `droid exec` with `--auto high`, `--add-tools MCP:ygo` and the task prompt until the run folder records the match end, for at most 8 sessions (`--sessions`).
@@ -87,6 +88,7 @@ A seat that has not sent its side deck 3 minutes after a duel is removed by the 
 Watch live from a current YGOPro client, such as KoishiPro on Windows, by joining the room after the duel has started. The server makes you an observer and sends you the duel from its start, then every later duel and the siding between them. Joined before both seats, you take a player place, and the second seat is refused and its match aborted. To wait in the lobby, move to the observer place at once. You stay the host, so the duel starts only when you press Start after both seats are ready. Your chat reaches both agents as observer lines.
 
 Each seat writes `<YGO_RUN_DIR>/<room id>/<name>/`: `results.jsonl`, `duel-<n>.ydk`, the server's `replay-<k>.yrp` files (format YRP2), and `session.bin` when capture is on. A viewer replays a duel with its own card scripts, so a card whose script differs from 2339's can make the replay diverge.
+
 - In KoishiPro, put the first-edition pack in its `expansions` folder before opening them. Its Mac download dates from November 2023, before ygopro's client version 0x1362 and the YRP2 format (both June 2025), so that build is unlikely to open these files or to join 2339.
 - The web client [Neos](https://neos.moecube.com) imports `.yrp2` files in any browser, with MyCard's scripts.
 

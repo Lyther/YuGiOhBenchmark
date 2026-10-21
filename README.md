@@ -65,43 +65,22 @@ codex exec --skip-git-repo-check \
 
 `codex exec` refuses to start outside a Git repository unless `--skip-git-repo-check` is given, and it cannot ask for approval, so the seat's tools are pre-approved. The timeout is set explicitly above the seat's 240 s wait budget (`YGO_WAIT_MS`), and the output limit is raised so seat results are not truncated. Set `YGO_DECK` to a `.ydk` path to start an agent with a given deck; otherwise it builds one with the deck tools.
 
-Droid reads MCP servers from `.factory/mcp.json` in its working folder as well as from `~/.factory/mcp.json`, so each seat's entry goes in its agent's own folder. Write `/path/to/match01/droid/.factory/mcp.json`:
-
-```json
-{ "mcpServers": { "ygo": { "type": "stdio", "command": "node", "args": ["/path/to/repo/src/bin/seat.js"],
-  "env": { "YGO_ROOM": "M,TM0,NF#match01", "YGO_NAME": "droid-seat", "YGO_CARDS_DIR": "/path/to/repo/data/cards",
-           "YGO_RUN_DIR": "/path/to/match01/droid", "YGO_CAPTURE": "1" },
-  "timeout": 300000 } } }
-```
+Droid: run each agent with the launcher, from a machine where Droid is logged in:
 
 ```bash
-cd /path/to/match01/droid
-droid exec -m <model> --auto high "$(cat /path/to/repo/prompts/play-match.md)"
+npm run droid-agent -- --dir /path/to/match01 --label droid --model <model> --effort max --room 'M,TM0,NF#match01'
 ```
 
-`timeout` is Droid's per-call limit in milliseconds; it is set above the wait budget because Droid documents no default. The seat's tools run at every `--auto` level (`droid exec --list-tools` lists them); `--auto high` only decides what else the agent may do. Without `-r`, `droid exec` uses the reasoning effort of your Droid settings. If another Node.js comes first on Droid's `PATH`, give `command` the absolute path of Node 22 or newer.
+The launcher makes `/path/to/match01/droid/` the agent's working folder and its seat's `YGO_RUN_DIR`. It gives the agent its own Droid home, `/path/to/match01/droid.droid-home/`, holding the seat's MCP entry, the steer hook below and links to your Droid login, and nothing else. Droid reads that home instead of `~/.factory` through `FACTORY_HOME_OVERRIDE`.
+- Nothing is added to your own config. Your MCP servers, skills, plugins, hooks and `AGENTS.md` do not reach the agent; Droid's built-in tools and skills do.
+- That variable is undocumented, so the launcher first checks the agent's tool list and stops if any MCP server other than the seat appears.
+- It then runs `droid exec` with `--auto high`, `--add-tools MCP:ygo` and the task prompt until the run folder records the match end, for at most 8 sessions (`--sessions`).
+- Each session's stream log, the seat's log and a sessions log go to `/path/to/match01/logs/`.
+- `--name` (default `<label>-seat`), `--deck` and `--prompt` are optional. Without `--effort`, Droid uses the model's default, since the agent's home holds none of your settings.
 
-Droid also loads the MCP servers of your own config (`~/.factory/mcp.json`) and the skills in `~/.factory/skills` and `~/.agents/skills`, so both agents get them, and with that many MCP tools it lists them only behind `ToolSearch`. GPT-6 Luna then often sent its moves to `Execute` or `Skill` instead of the seat's tool and gave up (the counts are in [status](docs/status.md)). `--add-tools MCP:ygo` makes Droid list every MCP tool up front and removes nothing; in a small diagnostic rerun it cut those runs from 4 of 6 to 1 of 7, but in the next real match Luna's first session still collapsed, and the relaunch loop below is what finished the match. For a clean match, run Droid from an account whose config holds only what both agents should have.
+GPT-6 Luna often sent its moves to `Execute` or `Skill` instead of the seat and then gave up (the counts are in [status](docs/status.md)). Those calls succeeded: `echo choose5` exits 0 and tells the model nothing. The steer hook (`src/bin/steer.js`) adds the missing line. From the first duel to the match end, a call to any tool other than the seat's gets one more line in its result, saying the call did nothing in the match and naming `ygo___wait` and `ygo___answer`. The hook blocks nothing. In checks, Haiku and Luna both received a hook's added text, and Luna acted on this line. Whether it shortens a real collapse has not been measured yet. Before the private home existed, Luna had the operator's 70 MCP tools behind `ToolSearch`; `--add-tools MCP:ygo` lists the MCP tools up front and removes nothing.
 
-In those collapses the stray calls succeeded: `echo choose5` through `Execute` exits 0 and tells the model nothing. A Droid hook adds the missing line. Write `/path/to/match01/droid/.factory/hooks.json` next to `mcp.json`, with the seat's `YGO_RUN_DIR`, `YGO_ROOM` and `YGO_NAME` as the three arguments:
-
-```json
-{ "PostToolUse": [ { "matcher": "^(?!ygo___|mcp__ygo__|ToolSearch$)",
-  "hooks": [ { "type": "command", "timeout": 10,
-    "command": "node /path/to/repo/src/bin/steer.js /path/to/match01/droid 'M,TM0,NF#match01' droid-seat" } ] } ] }
-```
-
-From the first duel to the match end, every call to a tool other than the seat's then returns one more line. It says the call did nothing in the match and names `ygo___wait` and `ygo___answer`. The hook blocks nothing. In checks, Haiku and Luna both received a hook's added text, and Luna acted on this line. Whether it shortens a real collapse has not been measured yet.
-
-If a connection drops, the seat rejoins the match by itself. If an agent or its seat stops mid-match, run the same command again in the same folder within about 5 minutes (how long 2339 holds a dropped seat): the new seat resumes the match from its run folder, with the deck the match started with. A model can also end its own session before the match is over; a loop reruns it until the folder records the end, and gives up after 8 sessions:
-
-```bash
-cd /path/to/match01/droid
-for session in 1 2 3 4 5 6 7 8; do
-  grep -rqsE '"type":"(match|aborted)"' --include=results.jsonl . && break
-  droid exec -m <model> --auto high "$(cat /path/to/repo/prompts/play-match.md)"
-done
-```
+If a connection drops, the seat rejoins the match by itself. If an agent or its seat stops mid-match, run the same command again in the same folder within about 5 minutes (how long 2339 holds a dropped seat): the new seat resumes the match from its run folder, with the deck the match started with. A model can also end its own session before the match is over; the Droid launcher then starts the next session itself.
 
 A seat that has not sent its side deck 3 minutes after a duel is removed by the server, and its opponent wins the match; nothing resumes it. The seat says how much side time is left in every text result while a side deck is due, which is all it can do for a model that is not calling a tool.
 
@@ -125,7 +104,7 @@ The seat reads only environment variables; [.env.example](.env.example) lists ev
 
 | Path | Purpose |
 | --- | --- |
-| `src/bin/` | `seat.js` (MCP seat), `steer.js` (Droid hook), `smoke.js`, `cards.js` (card refresh), `probe.js` (lobby check). |
+| `src/bin/` | `seat.js` (MCP seat), `droid-agent.js` (Droid agent launcher), `steer.js` (its hook), `smoke.js`, `cards.js` (card refresh), `probe.js` (lobby check). |
 | `src/seat/` | `controller.js` (the seat state machine), `view.js` (seat view DTOs), `record.js` (run folder). |
 | `src/game/` | Board mirror, events, labels, and prompt builders under `prompts/`. |
 | `src/cards/`, `src/deck/` | Card catalog and downloads; deck formats and edits. |

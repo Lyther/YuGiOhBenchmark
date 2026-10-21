@@ -422,7 +422,9 @@ class Seat {
   #deckText() {
     if (this.#resumeNote) return this.#resumeNote;
     const { main, extra, side } = this.#state.deck;
-    return `Your deck: Main ${main.length}, Extra ${extra.length}, Side ${side.length} (the server checks it). Submit it to join the room.`;
+    // 2339 enforces these without a banlist (3 copies verified live on 2026-10-21).
+    return `Your deck: Main ${main.length}, Extra ${extra.length}, Side ${side.length}. The server allows Main 40 to 60 cards, Extra up to 15, `
+      + "Side up to 15, at most 3 copies of a card, and checks the deck when you submit. Submit it to join the room.";
   }
 
   #sideText() {

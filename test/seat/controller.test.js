@@ -1182,3 +1182,11 @@ test("a call that arrives while the first submit is connecting is refused and le
   link.deliver(stocPacket(YGOProStocSelectHand));
   assert.equal(await submit, "prompt", "the submit that was already under way still returns its view");
 });
+
+test("the deck prompt states the server's deck rules", async (t) => {
+  const { seat } = await setup(t);
+  assert.equal(await seat.wait(), "prompt");
+  const { text } = seat.snapshot().prompt;
+  assert.match(text, /^Your deck: Main 3, Extra 1, Side 1\./);
+  assert.match(text, /Main 40 to 60 cards, Extra up to 15, Side up to 15, at most 3 copies of a card/);
+});

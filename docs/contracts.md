@@ -97,7 +97,7 @@ Not stored anywhere: model reasoning, tool-call history (the runtime keeps it), 
 
 ## Persistent Data
 
-`record.js` is the only writer. All files are append-only or write-once, except `seat.json`, which is replaced atomically. Write-once files are written under a temporary name and linked into place, so a hard stop leaves the whole file or none. The seat reads its folder back only to resume an interrupted match (Rejoin).
+`record.js` is the only writer. All files are append-only or write-once, except `seat.json`, which is replaced atomically. Write-once files are written under a temporary name and linked into place, so a hard stop leaves the whole file or none. The seat reads its folder back only to resume an interrupted match (Rejoin). The Droid hook `bin/steer.js` reads it too, never writing: `started` in `seat.json` and whether `results.jsonl` holds a `match` or `aborted` line.
 
 - **Folder:** `<YGO_RUN_DIR>/<roomId>/<name>/`.
   - `roomId` is the part of `YGO_ROOM` after `#`.

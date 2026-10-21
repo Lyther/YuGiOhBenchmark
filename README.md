@@ -83,6 +83,16 @@ droid exec -m <model> --auto high "$(cat /path/to/repo/prompts/play-match.md)"
 
 Droid also loads the MCP servers of your own config (`~/.factory/mcp.json`) and the skills in `~/.factory/skills` and `~/.agents/skills`, so both agents get them, and with that many MCP tools it lists them only behind `ToolSearch`. GPT-6 Luna then often sent its moves to `Execute` or `Skill` instead of the seat's tool and gave up (the counts are in [status](docs/status.md)). `--add-tools MCP:ygo` makes Droid list every MCP tool up front and removes nothing; in a small diagnostic rerun it cut those runs from 4 of 6 to 1 of 7, but in the next real match Luna's first session still collapsed, and the relaunch loop below is what finished the match. For a clean match, run Droid from an account whose config holds only what both agents should have.
 
+In those collapses the stray calls succeeded: `echo choose5` through `Execute` exits 0 and tells the model nothing. A Droid hook adds the missing line. Write `/path/to/match01/droid/.factory/hooks.json` next to `mcp.json`, with the seat's `YGO_RUN_DIR`, `YGO_ROOM` and `YGO_NAME` as the three arguments:
+
+```json
+{ "PostToolUse": [ { "matcher": "^(?!ygo___|mcp__ygo__|ToolSearch$)",
+  "hooks": [ { "type": "command", "timeout": 10,
+    "command": "node /path/to/repo/src/bin/steer.js /path/to/match01/droid 'M,TM0,NF#match01' droid-seat" } ] } ] }
+```
+
+From the first duel to the match end, every call to a tool other than the seat's then returns one more line. It says the call did nothing in the match and names `ygo___wait` and `ygo___answer`. The hook blocks nothing. In checks, Haiku and Luna both received a hook's added text, and Luna acted on this line. Whether it shortens a real collapse has not been measured yet.
+
 If a connection drops, the seat rejoins the match by itself. If an agent or its seat stops mid-match, run the same command again in the same folder within about 5 minutes (how long 2339 holds a dropped seat): the new seat resumes the match from its run folder, with the deck the match started with. A model can also end its own session before the match is over; a loop reruns it until the folder records the end, and gives up after 8 sessions:
 
 ```bash
@@ -95,7 +105,13 @@ done
 
 A seat that has not sent its side deck 3 minutes after a duel is removed by the server, and its opponent wins the match; nothing resumes it. The seat says how much side time is left in every text result while a side deck is due, which is all it can do for a model that is not calling a tool.
 
-Watch live by joining the room as an observer in KoishiPro. Each seat writes `<YGO_RUN_DIR>/<room id>/<name>/`: `results.jsonl`, `duel-<n>.ydk`, the server's `replay-<k>.yrp` files, and `session.bin` when capture is on. The server also announces a cloud replay id (`R#…`) for each duel in chat.
+Watch live from a current YGOPro client, such as KoishiPro on Windows, by joining the room after the duel has started. The server makes you an observer and sends you the duel from its start, then every later duel and the siding between them. Joined before both seats, you take a player place, and the second seat is refused and its match aborted. To wait in the lobby, move to the observer place at once. You stay the host, so the duel starts only when you press Start after both seats are ready. Your chat reaches both agents as observer lines.
+
+Each seat writes `<YGO_RUN_DIR>/<room id>/<name>/`: `results.jsonl`, `duel-<n>.ydk`, the server's `replay-<k>.yrp` files (format YRP2), and `session.bin` when capture is on. A viewer replays a duel with its own card scripts, so a card whose script differs from 2339's can make the replay diverge.
+- In KoishiPro, put the first-edition pack in its `expansions` folder before opening them. Its Mac download dates from November 2023, before ygopro's client version 0x1362 and the YRP2 format (both June 2025), so that build is unlikely to open these files or to join 2339.
+- The web client [Neos](https://neos.moecube.com) imports `.yrp2` files in any browser, with MyCard's scripts.
+
+The server announces a cloud replay code (`R#…`) for each duel in chat. Joined with such a code, 2339 sent a protocol client only the duel's summary, not the duel.
 
 ## Configuration
 
@@ -109,7 +125,7 @@ The seat reads only environment variables; [.env.example](.env.example) lists ev
 
 | Path | Purpose |
 | --- | --- |
-| `src/bin/` | `seat.js` (MCP seat), `smoke.js`, `cards.js` (card refresh), `probe.js` (lobby check). |
+| `src/bin/` | `seat.js` (MCP seat), `steer.js` (Droid hook), `smoke.js`, `cards.js` (card refresh), `probe.js` (lobby check). |
 | `src/seat/` | `controller.js` (the seat state machine), `view.js` (seat view DTOs), `record.js` (run folder). |
 | `src/game/` | Board mirror, events, labels, and prompt builders under `prompts/`. |
 | `src/cards/`, `src/deck/` | Card catalog and downloads; deck formats and edits. |

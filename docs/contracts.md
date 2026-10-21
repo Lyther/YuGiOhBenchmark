@@ -290,7 +290,7 @@ For `tribute`, `min` is a tribute total and `max` a card count. A card worth two
 
 `choose: []` submits zero cards for card, tribute and sum selections. It is distinct from cancellation; the server decides whether the empty selection is legal, including a sum met by mandatory cards alone.
 
-Every automatic answer appends an `auto` event naming what was chosen. The seat also answers `STOC_TIME_LIMIT` with `CTOS_TIME_CONFIRM` and, as host, sends `HS_START`; neither produces an event.
+Every automatic answer appends an `auto` event naming what was chosen. The seat also answers `STOC_TIME_LIMIT` with `CTOS_TIME_CONFIRM` and, as host, sends `HS_START`; neither produces an event. After 60 s in which it has sent nothing, a joined seat sends `CTOS_TIME_CONFIRM` on its own, also without an event: srvpro drops a client that is silent for 5 minutes, and on 2339 its opponent then wins the match. A room with no clock ignores the packet.
 
 ## Mapping and Validation Ownership
 

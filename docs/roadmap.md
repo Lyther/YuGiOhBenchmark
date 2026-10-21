@@ -208,7 +208,7 @@ Exit gate: a fresh clone follows README to a passing smoke run; stale status tex
 - Narration, public rankings, RL training, cross-game memory. Deferred by the concept; reopen only with a concept change.
 - Bo1 rooms. Trigger: a Bo1 experiment. Only the room string changes (drop the `M`); the seat follows the server's match end and assumes no number of duels.
 - Batched results with a "more events waiting" note. Trigger: a runtime whose output limit cannot be raised. Every current runtime's limit is configurable (architecture D-01, AD-13).
-- A dedicated 15-minute hold run (Q-02). Trigger: an idle disconnect in an agent match.
+- A dedicated 15-minute hold run (Q-02). Trigger: an idle disconnect in an agent match. It fired on 2026-10-21: srvpro drops a client silent for 5 minutes. The seat now sends a keepalive, and a 330 s hold passed on 2339; the 15-minute run itself is still to do.
 - A multi-match runner or scheduler. Trigger: more than a handful of matches per day. Deferred because two terminal commands per match are enough.
 - A licensed or official English source for pre-release cards. Trigger: community translations misleading agents, or a need to redistribute card text.
 - A type checker (`tsc --checkJs`). Trigger: DTO drift causing defects.

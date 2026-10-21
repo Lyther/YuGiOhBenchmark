@@ -18,7 +18,7 @@ Using the tools:
 - Build your deck with `card_search`, `card` and `deck_edit`, and check it with `deck_show`. You can also import a YDK, `ydke://` link or deck code you find on the web. If a deck is already loaded, you may submit it as is. Submit with `answer {"submit": true}`.
 - To side, swap cards between your Main or Extra Deck and your Side Deck with `deck_edit`, then submit. Each of the three keeps its size, and no card may be added or removed. While a side deck is due, every tool result says how much of the 3 minutes is left; a seat that has not submitted by then is removed and loses the match.
 - `surrender` gives up the current duel, not the match.
-- You may chat with your opponent using `chat`. Chat events also bring lines from observers and from the server.
+- Chat is part of the match: talk with your opponent using `chat` whenever you like, during their turn too. Chat events bring their lines, and lines from observers and the server.
 - Stay inside your working folder. Do not read, list or change files outside it, and do not look for your opponent's folder, decks or logs.
 - If the deck prompt says this seat holds an interrupted match, submit at once: the server keeps your place only for a few minutes, and the seat rejoins with the deck the match started with.
 - Keep calling `wait` or `answer` until the match is over (phase `ended`). Do not stop before that.

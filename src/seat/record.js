@@ -64,6 +64,14 @@ function readResults(folder) {
   return text.split("\n").filter(Boolean).flatMap(parseLine);
 }
 
+// How far a seat folder's match got, for readers outside the seat: whether a
+// duel started and whether the match has ended. Null before the seat claims it.
+export function readProgress(folder) {
+  const state = readJson(join(folder, STATE_FILE));
+  if (!state) return null;
+  return { started: state.started === true, ended: readResults(folder).some((line) => END_TYPES.has(line.type)) };
+}
+
 // The only writer of the run folder: results.jsonl lines, the submitted deck
 // per duel, the server's replay bytes as received, seat.json for a resume, and
 // optional session.bin.

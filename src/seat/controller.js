@@ -40,6 +40,8 @@ import {
 // A seat-state problem a tool reports as isError; nothing is sent.
 export class SeatError extends Error { }
 
+const BUSY = "a call is already waiting; let it return first";
+
 const REPLAY_GRACE_MS = 15_000;
 // srvpro's side_timeout: 2339 says "3 minutes" when a side deck is due, repeats
 // it as 2 and 1 minute, and at the third minute removes the seat, which loses
@@ -193,6 +195,7 @@ class Seat {
   #ready = [false, false];
   #startSent = false;
   #waiter = null;
+  #sending = false;
   #replayTimer = null;
   #duelsPlayed = 0;
   #replaysReceived = 0;
@@ -259,7 +262,7 @@ class Seat {
   // A runtime that gives up on a call aborts its signal: the seat is free at
   // once, and nothing the call would have shown counts as delivered.
   async wait({ signal } = {}) {
-    if (this.#waiter) return Promise.reject(new SeatError("a call is already waiting; let it return first"));
+    if (this.#waiter || this.#sending) return Promise.reject(new SeatError(BUSY));
     if (signal?.aborted) return "cancelled";
     const ready = this.#readyReason();
     const reason = ready ?? await new Promise((resolve) => {
@@ -287,11 +290,16 @@ class Seat {
     const action = resolveAnswer(prompt, answer);
     this.#state.prompt = null;
     this.#state.lastPrompt = prompt;
+    // The first submit connects before it waits; a call that arrives in that
+    // window would take the waiter slot and make this one fail after sending.
+    this.#sending = true;
     try {
       await this.#perform(action, prompt);
     } catch (error) {
       if (!this.#state.prompt && this.#state.phase !== "disconnected") this.#state.prompt = prompt;
       throw error;
+    } finally {
+      this.#sending = false;
     }
     return this.wait({ signal });
   }
@@ -390,7 +398,7 @@ class Seat {
   }
 
   #requireIdle() {
-    if (this.#waiter) throw new SeatError("a call is already waiting; let it return first");
+    if (this.#waiter || this.#sending) throw new SeatError(BUSY);
   }
 
   #requireLive() {

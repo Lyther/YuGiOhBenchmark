@@ -1154,3 +1154,24 @@ test("while a side deck is due, every text result says how long the server still
   assert.equal(seat.sideLeftMs(), null);
   assert.doesNotMatch(await textOf("deck_show"), /Side time/, "no notice once the side deck is accepted");
 });
+
+test("a call that arrives while the first submit is connecting is refused and leaves the submit alone", async (t) => {
+  let open;
+  const gate = new Promise((resolve) => { open = resolve; });
+  const { seat, link } = await setup(t, { connect: async (options, peer) => { await gate; return peer.connect(options); } });
+  const submit = seat.answer({ submit: true });
+  await tick();
+  const refused = (call) => Promise.race([call.then(() => "accepted", (error) => error.message), delay(50).then(() => "accepted")]);
+  assert.match(await refused(seat.wait()), /let it return first/);
+  assert.match(await refused(seat.answer({ submit: true })), /let it return first/);
+  open();
+  await tick();
+  link.deliver(stocPacket(YGOProStocJoinGame, { info: HOST_INFO }));
+  link.deliver(stocPacket(YGOProStocTypeChange, { type: 0x10 | 0 }));
+  link.deliver(stocPacket(YGOProStocHsPlayerEnter, { name: "gpt-seat", pos: 1 }));
+  link.deliver(stocPacket(YGOProStocHsPlayerChange, status(0, PlayerChangeState.READY)));
+  link.deliver(stocPacket(YGOProStocHsPlayerChange, status(1, PlayerChangeState.READY)));
+  link.deliver(stocPacket(YGOProStocDuelStart));
+  link.deliver(stocPacket(YGOProStocSelectHand));
+  assert.equal(await submit, "prompt", "the submit that was already under way still returns its view");
+});

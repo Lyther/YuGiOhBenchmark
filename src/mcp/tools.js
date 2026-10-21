@@ -4,7 +4,7 @@ import { TYPE_VOCABULARY } from "../cards/catalog.js";
 import { applyEdits, DeckEditError, exportDeck } from "../deck/deck.js";
 import { AnswerError } from "../game/prompts/index.js";
 import { SeatError } from "../seat/controller.js";
-import { deckView, seatView } from "../seat/view.js";
+import { deckView, seatView, sideNotice } from "../seat/view.js";
 import { renderCard, renderDeck, renderSearch, renderSeat } from "./render.js";
 
 // Claude Code keeps results up to this size inline instead of saving them to
@@ -28,13 +28,13 @@ function failure(message) {
 const CANCELLED = text("Cancelled; nothing was delivered. Call wait to see the current state.");
 
 function viewResult(seat, { full = false, format: shape = "text" } = {}) {
-  const { dto, cursor } = seatView(seat.snapshot(), { catalog: seat.catalog, full });
+  const { dto, cursor } = seatView(seat.snapshot(), { catalog: seat.catalog, full, sideLeftMs: seat.sideLeftMs() });
   seat.markDelivered(cursor);
   return text(shape === "json" ? JSON.stringify(dto) : renderSeat(dto));
 }
 
 function nextHint(seat) {
-  return seatView(seat.snapshot(), { catalog: seat.catalog }).dto.next;
+  return seatView(seat.snapshot(), { catalog: seat.catalog, sideLeftMs: seat.sideLeftMs() }).dto.next;
 }
 
 // Seat-state and answer problems become isError results with the next step;
@@ -204,8 +204,25 @@ function roomTools(seat) {
   ];
 }
 
+// The views of wait, answer and surrender end in a Next line that carries the
+// side notice. The other tools do not, and a siding model spends its time on
+// them, so their text results get the notice as a last line. Exports and JSON
+// stay plain data.
+const NEXT_TOOLS = new Set(["wait", "answer", "surrender"]);
+
+function sideReminded(seat, handler) {
+  return async (args, signal) => {
+    const result = await handler(args, signal);
+    const left = seat.sideLeftMs();
+    if (left === null || (args.format !== undefined && args.format !== "text")) return result;
+    return text(`${result.content.map((block) => block.text).join("\n")}\n${sideNotice(left)}`);
+  };
+}
+
 // The tool list, in contract order. A tool is listed only once it works.
 export function seatTools({ seat, catalog, log }) {
   const definitions = [...playTools(seat), ...deckTools(seat, catalog), ...cardTools(catalog), ...roomTools(seat)];
-  return definitions.map(([name, config, handler]) => ({ name, config: { ...config, _meta: META }, handler: guarded(seat, log, handler) }));
+  return definitions.map(([name, config, handler]) => ({
+    name, config: { ...config, _meta: META }, handler: guarded(seat, log, NEXT_TOOLS.has(name) ? handler : sideReminded(seat, handler)),
+  }));
 }

@@ -133,12 +133,21 @@ function waitingOf(state) {
   return state.waiting === "server" || state.waiting === "rejoin" ? state.waiting : "opponent";
 }
 
-function nextSentence(state) {
+// srvpro removes a seat that has not sent its side deck in time, and the
+// opponent wins; the only way to say so is in the results the seat returns.
+export function sideNotice(leftMs) {
+  const left = Math.ceil(leftMs / 1000);
+  if (left <= 60) return `Side time is almost out: ${left} s left. Submit now with answer {"submit": true}; at 0 the server removes this seat and your opponent wins the match.`;
+  const minutes = Math.floor(left / 60);
+  return `Side time left: about ${minutes ? `${minutes} min ` : ""}${left % 60} s. At 0 the server removes this seat and your opponent wins the match.`;
+}
+
+function nextSentence(state, sideLeftMs) {
   if (state.phase === "disconnected") return `The seat is disconnected (${state.disconnect?.reason}); this match cannot continue.`;
   if (state.phase === "ended") return "The match is over; stop calling tools.";
   const prompt = state.prompt;
   if (prompt?.kind === "deck") return 'Submit your deck: answer {"submit": true}.';
-  if (prompt?.kind === "side") return 'Side Deck: submit with answer {"submit": true} when ready.';
+  if (prompt?.kind === "side") return `Side Deck: submit with answer {"submit": true} when ready.${sideLeftMs === null ? "" : ` ${sideNotice(sideLeftMs)}`}`;
   if (prompt) return `Answer prompt ${prompt.seq}: ${answerHelp(prompt)}.`;
   if (state.waiting === "server") return "The server is finishing the match; call wait.";
   if (state.waiting === "rejoin") return "The seat lost its connection and is rejoining the match; call wait.";
@@ -147,7 +156,7 @@ function nextSentence(state) {
 
 // The only place seat state becomes a boundary shape (contracts.md SeatView).
 // Returns the DTO and the cursor to mark as delivered.
-export function seatView(state, { catalog, full = false }) {
+export function seatView(state, { catalog, full = false, sideLeftMs = null }) {
   const board = state.board;
   const sendBoard = Boolean(board) && (full || board.version > state.delivered.boardVersion);
   const pending = state.events.filter((event) => event.seq > state.delivered.event);
@@ -163,7 +172,7 @@ export function seatView(state, { catalog, full = false }) {
     prompt: state.prompt ? promptView(state.prompt) : null,
     waiting: waitingOf(state),
     disconnected: state.disconnect?.reason ?? null,
-    next: nextSentence(state),
+    next: nextSentence(state, sideLeftMs),
   };
   const cursor = {
     event: pending.at(-1)?.seq ?? state.delivered.event,

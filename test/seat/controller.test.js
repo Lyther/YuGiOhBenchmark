@@ -81,6 +81,7 @@ async function setup(t, overrides = {}) {
     config, catalog, deck: DECK, record, connect, log,
     replayGraceMs: overrides.replayGraceMs ?? 40, rejoinBaseMs: overrides.rejoinBaseMs ?? 1, random: overrides.random,
     restoreMs: overrides.restoreMs ?? 15_000, surrenderGraceMs: overrides.surrenderGraceMs, keepaliveMs: overrides.keepaliveMs,
+    now: overrides.now,
   });
   // Closing flushes the run folder's queued writes before it is removed.
   t.after(async () => {
@@ -1122,4 +1123,34 @@ test("a seat that has sent nothing for a while sends a TIME_CONFIRM so srvpro do
   assert.ok(link.take().some((packet) => packet instanceof YGOProCtosHandResult), "a real answer still goes out");
   link.deliver(stocPacket(YGOProStocSelectTp));
   assert.equal(await answered, "prompt");
+});
+
+test("while a side deck is due, every text result says how long the server still waits", async (t) => {
+  let clock = 1_000_000;
+  const { seat, link } = await setup(t, { now: () => clock });
+  await joinRoom(seat, link);
+  await playDuel(seat, link, { winner: 0 });
+  link.deliver(stocPacket(YGOProStocChangeSide));
+  assert.equal(await seat.wait(), "prompt");
+  assert.match(seat.snapshot().prompt.text, /3 minutes/, "the limit is in the prompt itself");
+  const tools = Object.fromEntries(seatTools({ seat, catalog, log }).map((tool) => [tool.name, tool.handler]));
+  const textOf = async (name, args = {}) => (await tools[name](args)).content.map((block) => block.text).join("\n");
+  clock += 100_000;
+  for (const [name, args] of [["wait", {}], ["deck_show", {}], ["card", { name: "Dark Magician" }], ["card_search", { name: "magician" }]]) {
+    assert.match(await textOf(name, args), /Side time left: about 1 min 20 s/, name);
+  }
+  assert.match(JSON.parse(await textOf("wait", { format: "json" })).next, /Side time left: about 1 min 20 s/);
+  assert.doesNotMatch(await textOf("deck_show", { format: "ydk" }), /Side time/, "an export stays plain data");
+  clock += 50_000;
+  assert.match(await textOf("deck_show"), /almost out: 30 s left\. Submit now with answer \{"submit": true\}/);
+  clock += 60_000;
+  assert.match(await textOf("wait"), /almost out: 0 s left/);
+  link.take();
+  const submitted = seat.answer({ submit: true });
+  await tick();
+  link.deliver(stocPacket(YGOProStocDuelStart));
+  link.deliver(stocPacket(YGOProStocSelectHand));
+  assert.equal(await submitted, "prompt");
+  assert.equal(seat.sideLeftMs(), null);
+  assert.doesNotMatch(await textOf("deck_show"), /Side time/, "no notice once the side deck is accepted");
 });

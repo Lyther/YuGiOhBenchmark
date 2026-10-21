@@ -41,6 +41,10 @@ import {
 export class SeatError extends Error { }
 
 const REPLAY_GRACE_MS = 15_000;
+// srvpro's side_timeout: 2339 says "3 minutes" when a side deck is due, repeats
+// it as 2 and 1 minute, and at the third minute removes the seat, which loses
+// the match with no reconnect hold (system_kicked). The seat only reports it.
+const SIDE_LIMIT_MS = 180_000;
 // A lost connection is rejoined with backoff 1, 2, 4, 8, 16, 16 s, each with
 // jitter in [0.5, 1.5): about 47 s, inside srvpro's reconnect wait (90 s by
 // default; 2339 held a dropped seat for 298 s on 2026-10-08).
@@ -162,7 +166,7 @@ class Seat {
     [YGOProMsgRetry, (seat) => seat.#onRetry()],
   ]);
 
-  #config; #catalog; #record; #connect; #log; #graceMs; #random; #rejoinBaseMs; #restoreMs; #surrenderGraceMs; #keepaliveMs;
+  #config; #catalog; #record; #connect; #log; #graceMs; #random; #rejoinBaseMs; #restoreMs; #surrenderGraceMs; #keepaliveMs; #now; #sideLimitMs;
   #keepaliveTimer = null;
   #connection = null;
   #generation = 0;
@@ -203,7 +207,7 @@ class Seat {
 
   constructor({
     config, catalog, deck, record, connect, log, replayGraceMs = REPLAY_GRACE_MS, rejoinBaseMs = REJOIN_BASE_MS, random = Math.random,
-    restoreMs = RESTORE_MS, surrenderGraceMs = SURRENDER_GRACE_MS, keepaliveMs = KEEPALIVE_MS,
+    restoreMs = RESTORE_MS, surrenderGraceMs = SURRENDER_GRACE_MS, keepaliveMs = KEEPALIVE_MS, now = Date.now, sideLimitMs = SIDE_LIMIT_MS,
   }) {
     this.#config = config;
     this.#catalog = catalog;
@@ -215,12 +219,14 @@ class Seat {
     this.#restoreMs = restoreMs;
     this.#surrenderGraceMs = surrenderGraceMs;
     this.#keepaliveMs = keepaliveMs;
+    this.#now = now;
+    this.#sideLimitMs = sideLimitMs;
     this.#random = random;
     this.#state = {
       phase: "deck", room: config.room, name: config.name, host: false, opponent: null, opponentReady: false,
       prompt: null, lastPrompt: null, promptSeq: 0, events: [], board: null, hint: null,
       deck: copyDeck(deck), submitted: null, delivered: { event: 0, boardVersion: -1 },
-      match: { duel: 0, results: [], score: { me: 0, opponent: 0, draws: 0 } }, disconnect: null, waiting: null,
+      match: { duel: 0, results: [], score: { me: 0, opponent: 0, draws: 0 } }, disconnect: null, waiting: null, sideEnds: null,
     };
     this.#resumeNote = resumeNote(record.inspect());
     this.#setPrompt(lobbyPrompt("deck", { text: this.#deckText() }));
@@ -236,6 +242,12 @@ class Seat {
 
   snapshot() {
     return this.#state;
+  }
+
+  // Milliseconds the server still waits for a side deck, or null when none is due.
+  sideLeftMs() {
+    const { prompt, sideEnds } = this.#state;
+    return prompt?.kind === "side" && sideEnds !== null ? Math.max(0, sideEnds - this.#now()) : null;
   }
 
   markDelivered({ event, boardVersion }) {
@@ -407,7 +419,9 @@ class Seat {
 
   #sideText() {
     const last = this.#state.match.results.at(-1);
-    return `Duel ${this.#state.match.duel} is over (${last?.result ?? "no result"}). Side Deck: submit your deck as it is, or edit it first.`;
+    const minutes = this.#sideLimitMs / 60_000;
+    return `Duel ${this.#state.match.duel} is over (${last?.result ?? "no result"}). Side Deck: submit your deck as it is, or edit it first. `
+      + `The server allows ${minutes} minutes; after that it removes the seat and the opponent wins the match.`;
   }
 
   // Sending ------------------------------------------------------------------
@@ -852,6 +866,7 @@ class Seat {
     this.#missedDuel();
     this.#sideSubmitted = false;
     this.#state.phase = "side";
+    this.#state.sideEnds = this.#now() + this.#sideLimitMs;
     this.#setPrompt(lobbyPrompt("side", { text: this.#sideText() }));
   }
 

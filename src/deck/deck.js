@@ -48,8 +48,17 @@ export function exportDeck(deck, format) {
   const encoded = new YGOProDeck(plain(deck));
   if (format === "ydk") return encoded.toYdkString();
   if (format === "ydke") return encoded.toYdkeURL();
-  if (format === "code") return encoded.toEncodedString();
+  if (format === "code") return deckCode(encoded);
   throw new Error(`unknown deck format ${format}; use ydk, ydke or code`);
+}
+
+// The room has no banlist, so a legal deck can hold more copies than a code can.
+function deckCode(encoded) {
+  try {
+    return encoded.toEncodedString();
+  } catch (error) {
+    throw new DeckEditError(`a deck code cannot hold this deck (${error.message}); export it as ydk or ydke`);
+  }
 }
 
 export function sectionFor(code, catalog) {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { exportDeck, parseDeck } from "../../src/deck/deck.js";
+import { DeckEditError, exportDeck, parseDeck } from "../../src/deck/deck.js";
 import { fixtureCatalog } from "../helpers/fixture-catalog.js";
 
 const catalog = await fixtureCatalog();
@@ -56,4 +56,10 @@ test("an edit that cannot apply rejects the whole call with the reason", async (
   assert.throws(() => applyEdits(start, { move: [{ card: 46986414, from: "main", to: "side" }] }, catalog), /Dark Magician/);
   assert.throws(() => applyEdits(start, { add: [{ card: 0 }] }, catalog), /code/);
   assert.throws(() => applyEdits(start, {}, catalog), /nothing to do/);
+});
+
+test("a deck code that cannot hold the deck says so, and ydk and ydke still can", () => {
+  const heavy = { main: Array(5).fill(89631139), extra: [], side: [] };
+  assert.throws(() => exportDeck(heavy, "code"), (error) => error instanceof DeckEditError && /deck code cannot hold this deck.*ydk or ydke/.test(error.message));
+  for (const format of ["ydk", "ydke"]) assert.equal(parseDeck(exportDeck(heavy, format)).main.length, 5, format);
 });

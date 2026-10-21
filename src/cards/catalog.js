@@ -17,8 +17,9 @@ const LAYERS = Object.freeze([
   { source: "en-US", cdbs: ["cards.cdb"], strings: "strings.conf", required: true },
 ]);
 
-// A card's data (type, stats, archetype codes) instead follows the server,
-// which loads its pre-release files over its base data: the newest file that
+// A card's data (type, stats, archetype codes) instead follows the server's
+// load order, a fixed source order and never file dates: the server loads its
+// pre-release files over its base data, so the last source in this order that
 // has the code decides it, whatever language that file's text is in.
 const DATA_ORDER = Object.freeze(["zh-CN", "en-US", "super-pre-en", "super-pre"]);
 const DATA_FIELDS = Object.freeze(["alias", "type", "level", "attribute", "race", "attack", "defense", "lscale", "rscale", "linkMarker", "setcode"]);
@@ -174,7 +175,7 @@ function toCard(entry, source, strings) {
   };
 }
 
-function newestData(layers) {
+function serverData(layers) {
   const newest = new Map();
   for (const source of DATA_ORDER) {
     for (const entry of layers.find((layer) => layer.source === source)?.entries ?? []) newest.set(entry.code, entry);
@@ -202,7 +203,7 @@ class Catalog {
     for (const layer of layers) {
       for (const entry of layer.entries) chosen.set(entry.code, { entry, source: layer.source });
     }
-    const newest = newestData(layers);
+    const newest = serverData(layers);
     this.cards = new Map();
     this.meta = new Map();
     for (const [code, { entry, source }] of chosen) {

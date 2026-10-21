@@ -193,7 +193,7 @@ The shape is a layered single process with a pure core. All game understanding (
   - The phase becomes `ended` once the seat holds one replay per duel played, the server closes the connection, the seat is stopped, or 15 s pass, whichever comes first.
   - So every replay the server sent is saved before any tool reports the match over, and an agent that stops at "match over" cannot cut them off. There is normally no wait: srvpro itself waits up to 5 s for the last replay before it sends them. If the 15 s pass first, the folder lacks the replays that had not arrived: it holds fewer replay files than duel lines.
 - **Shutdown.** The process lives until the runtime closes stdin or receives `SIGTERM`/`SIGINT`. It then closes the connection, flushes the log and exits 0. During a started match it does not send `LEAVE_GAME`, which would forfeit: it writes an `interrupted` line, and srvpro holds the seat for a restarted seat to resume (AD-14). Otherwise it sends `LEAVE_GAME` first.
-- **Failures.** A socket error, an unexpected close, or a server packet the seat cannot handle starts a rejoin (`waiting: rejoin`; contracts Rejoin). Only a refused or exhausted rejoin puts the seat in phase `disconnected` with a reason, which every tool reports.
+- **Failures.** A socket error, an unexpected close, or a server packet the seat cannot handle starts a rejoin (`waiting: rejoin`; contracts Rejoin). A first connect that fails gives the deck prompt back instead, since nothing on the server holds the seat yet. Only a refused or exhausted rejoin puts the seat in phase `disconnected` with a reason, which every tool reports.
 - **Other commands.**
   - `npm run cards` refreshes card data and exits.
   - `npm run probe` joins a room, prints the lobby JSON and leaves.

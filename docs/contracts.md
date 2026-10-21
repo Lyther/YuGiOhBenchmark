@@ -154,7 +154,7 @@ Rules shared by all tools:
   - Seat-state errors return `isError: true` with one sentence and a `next` hint. The cases are: no pending prompt, an answer field that does not fit the prompt kind, an option number out of range, an unknown card name in a deck edit, chat while not connected, an answer, chat or surrender while the seat is rejoining, or a tool called after `disconnected`.
   - Server rejections are never tool errors. They come back as the next prompt with `rejected`.
 - **Annotations.** `deck_show`, `card` and `card_search` declare `readOnlyHint: true`; the other tools declare none. Approval is configured in the runtime (architecture Operations), not inferred from hints.
-- **Concurrency.** At most one blocking call (`wait`, `answer`, `surrender`) runs at a time per seat. A second one returns an `isError` that says a call is already waiting. `deck_show`, `deck_edit`, `card`, `card_search` and `chat` can run at any time, including while a `wait` is blocked.
+- **Concurrency.** At most one blocking call (`wait`, `answer`, `surrender`) runs at a time per seat. A second one returns an `isError` that says a call is already waiting. A blocking call the runtime cancels frees the seat at once and marks nothing delivered, so the next call shows what it would have shown. `deck_show`, `deck_edit`, `card`, `card_search` and `chat` can run at any time, including while a `wait` is blocked.
 
 ### `wait`
 
@@ -178,6 +178,7 @@ Rules shared by all tools:
   - The seat checks that the field fits the pending prompt's kind (see Answers) and that the numbers are in range.
   - It encodes the answer (or, for `deck`/`side`, sends the working deck), clears the prompt, then waits exactly as `wait` does.
   - A `MSG_RETRY`, `DECKERROR` or `SIDEERROR` reply comes back as the re-issued prompt with `rejected` set.
+  - If the first deck submit cannot reach the server, the deck prompt comes back with the reason in `rejected`, and the next submit tries again. Nothing is recorded; srvpro holds no seat before the first duel.
 - **Result:** SeatView.
 
 ### `deck_show`
@@ -193,7 +194,7 @@ Rules shared by all tools:
   - `Edit` is `{card: int | string, count?: 1..60, section?: "main" | "extra" | "side"}`.
   - `Move` is `{card: int | string, count?: int, from: section, to: section}`.
 - **Behavior:**
-  - `import` replaces the deck and accepts YDK text, a `ydke://` URL or a KoishiPro deck code.
+  - `import` replaces the deck and accepts YDK text, a `ydke://` URL or a KoishiPro deck code. A deck code must decode to whole 4-byte card entries; a word or a cut-off code is refused.
   - A name must resolve to exactly one catalog card (case-insensitive exact name, then a unique prefix). Otherwise the call is an error that lists up to 5 suggestions.
   - `add` without a section puts Fusion/Synchro/Xyz/Link cards in extra and everything else in main.
   - Edits are allowed in any phase; only the submitted deck matters. A join, including a rejoin before the first duel, sends the deck last submitted, never later edits.
@@ -266,7 +267,7 @@ The `kind` values are closed. Each row gives the answer field, what the server a
 | Kind | Source | Answer | Auto when |
 |---|---|---|---|
 | `deck`, `side` | seat / `CHANGE_SIDE` | `submit` | never |
-| `rps` | `SELECT_HAND`, `MSG_ROCK_PAPER_SCISSORS` | `choose` 1 of Rock, Paper, Scissors | never |
+| `rps` | `SELECT_HAND`, `MSG_ROCK_PAPER_SCISSORS` | `choose` 1 of Rock, Paper, Scissors, sent as the server's 2, 3, 1 (upstream report, defect 5) | never |
 | `first` | `SELECT_TP` | `choose` 1 of Go first, Go second | never |
 | `command` | `SELECT_IDLECMD` | `choose` 1 | never |
 | `battle` | `SELECT_BATTLECMD` | `choose` 1 | never |
@@ -277,9 +278,9 @@ The `kind` values are closed. Each row gives the answer field, what the server a
 | `tribute` | `SELECT_TRIBUTE` | `choose` at most `max` cards whose `tributes` add up to at least `min`, or `cancel` if cancelable | every card counts as 1 tribute, `min` = `max` = number of cards, not cancelable |
 | `unselect` | `SELECT_UNSELECT_CARD` | `choose` 1, or `finish` / `cancel` when allowed | never |
 | `sum` | `SELECT_SUM` | `choose` the non-mandatory cards; each card, mandatory ones included, counts as one of its `values`. `exactly`: `min`..`max` chosen cards whose total can equal `sumTarget`. `at least`: the total reaches `sumTarget` with no spare card. Mandatory cards are in `mustInclude` | never |
-| `sort` | `SORT_CARD` | `choose` all options in the new order, or `cancel` to keep the order; the seat sends each card's new position, as ocgcore reads it | one card |
+| `sort` | `SORT_CARD` | `choose` all options in the new order, or `cancel` to keep the order. Option 1 is the current top card of the Deck, and the first one listed goes on top; the seat sends each card's new position, as ocgcore reads it | one card |
 | `counter` | `SELECT_COUNTER` | `counts` adding up to `total`, each at most that card's `counters` | one card |
-| `place` | `SELECT_PLACE`, `SELECT_DISFIELD` | `choose` `min` zones. A server count of 0 (setting a Spell/Trap) means 1 zone or `cancel`; the seat sends a cancel as `[player, 0, 0]` | exactly `min` zones available, not cancelable |
+| `place` | `SELECT_PLACE`, `SELECT_DISFIELD` | `choose` exactly `min` zones. A server count of 0 (setting a Spell/Trap) means 1 zone or `cancel`; the seat sends a cancel as `[player, 0, 0]` | exactly `min` zones available, not cancelable |
 | `position` | `SELECT_POSITION` | `choose` 1 | one position |
 | `race`, `attribute` | `ANNOUNCE_RACE`, `ANNOUNCE_ATTRIB` | `choose` exactly `min` | available = `min` |
 | `number` | `ANNOUNCE_NUMBER` | `choose` 1 | one number |

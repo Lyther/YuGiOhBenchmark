@@ -81,7 +81,19 @@ droid exec -m <model> --auto high "$(cat /path/to/repo/prompts/play-match.md)"
 
 `timeout` is Droid's per-call limit in milliseconds; it is set above the wait budget because Droid documents no default. The seat's tools run at every `--auto` level (`droid exec --list-tools` lists them); `--auto high` only decides what else the agent may do. Without `-r`, `droid exec` uses the reasoning effort of your Droid settings. If another Node.js comes first on Droid's `PATH`, give `command` the absolute path of Node 22 or newer.
 
-If a connection drops, the seat rejoins the match by itself. If an agent or its seat stops mid-match, run the same command again in the same folder within about 5 minutes (how long 2339 holds a dropped seat): the new seat resumes the match from its run folder, with the deck the match started with.
+Droid also loads the MCP servers of your own config (`~/.factory/mcp.json`) and the skills in `~/.factory/skills` and `~/.agents/skills`, so both agents get them, and with that many MCP tools it lists them only behind `ToolSearch`. GPT-6 Luna then often sent its moves to `Execute` or `Skill` instead of the seat's tool and gave up (the counts are in [status](docs/status.md)). `--add-tools MCP:ygo` makes Droid list the tools up front, which cut those runs sharply but did not end them. For a clean match, run Droid from an account whose config holds only what both agents should have.
+
+If a connection drops, the seat rejoins the match by itself. If an agent or its seat stops mid-match, run the same command again in the same folder within about 5 minutes (how long 2339 holds a dropped seat): the new seat resumes the match from its run folder, with the deck the match started with. A model can also end its own session before the match is over; a loop reruns it until the folder records the end, and gives up after 8 sessions:
+
+```bash
+cd /path/to/match01/droid
+for session in 1 2 3 4 5 6 7 8; do
+  grep -rqsE '"type":"(match|aborted)"' --include=results.jsonl . && break
+  droid exec -m <model> --auto high "$(cat /path/to/repo/prompts/play-match.md)"
+done
+```
+
+A seat that has not sent its side deck 3 minutes after a duel is removed by the server, and its opponent wins the match; nothing resumes it. The seat says how much side time is left in every text result while a side deck is due, which is all it can do for a model that is not calling a tool.
 
 Watch live by joining the room as an observer in KoishiPro. Each seat writes `<YGO_RUN_DIR>/<room id>/<name>/`: `results.jsonl`, `duel-<n>.ydk`, the server's `replay-<k>.yrp` files, and `session.bin` when capture is on. The server also announces a cloud replay id (`R#…`) for each duel in chat.
 

@@ -27,7 +27,7 @@ Optional first-edition effect pack: put `.ypk` files in `data/cards/first-editio
 
 Pick a fresh room id. Each agent gets its own seat, the same room and a distinct name, and both receive [prompts/play-match.md](prompts/play-match.md).
 
-Start each agent in its own empty folder outside the repo, and make that folder its seat's `YGO_RUN_DIR`. An agent can explore its working folder, so it must not find the other seat's decks or packet capture there.
+Start each agent in its own empty folder outside the repo, and make that folder its seat's `YGO_RUN_DIR`. An agent can explore its working folder, so it must not find the other seat's decks or packet capture there. The prompt also tells each agent to stay inside its folder; that rule and the separate folders are the whole separation, with no sandbox.
 
 ```bash
 mkdir -p /path/to/match01/claude /path/to/match01/codex

@@ -103,6 +103,23 @@ test("layers merge zh-CN < super-pre < super-pre-en < en-US and name their sourc
   assert.equal(catalog.size, 18);
 });
 
+test("the newest file decides a card's data while the text stays in the best language", async (t) => {
+  const dir = await englishOnly(t);
+  const [blueEyes] = rows().filter((row) => row.id === 89631139);
+  const update = { ...blueEyes, name: "青眼白龙", desc: "中文效果", setcode: 0x2f0, atk: 3100 };
+  await writeSet(dir, "super-pre", { "test-release.cdb": [{ ...blueEyes, atk: 3050, setcode: 0x2f1 }], "test-update.cdb": [update] },
+    "test-strings.conf", ["!setname 0x2f0 Dragon Sphere"]);
+  const catalog = await loadCatalog(dir);
+  const card = catalog.card(89631139);
+  assert.equal(card.name, "Blue-Eyes White Dragon", "the English name stays");
+  assert.equal(card.text, blueEyes.desc, "the English effect text stays");
+  assert.equal(card.source, "en-US");
+  assert.equal(card.atk, 3100, "the update beats both the release file and en-US");
+  assert.deepEqual(card.setnames, ["Dragon Sphere"], "the update's archetype code is the one named");
+  assert.deepEqual(catalog.search({ setname: "Dragon Sphere" }).cards.map((found) => found.code), [89631139], "and the one searched");
+  assert.deepEqual(catalog.counts, { "super-pre": 0, "en-US": 15 }, "a card is still counted under the file its text comes from");
+});
+
 test("a missing en-US set stops loading and names the refresh command", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "ygo-catalog-empty-"));
   t.after(() => rm(dir, { recursive: true, force: true }));

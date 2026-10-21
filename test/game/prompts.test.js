@@ -406,6 +406,15 @@ test("main-phase commands name a Pendulum Summon and a Flip Summon", () => {
   ]);
 });
 
+// ocgcore's sort_card lists the current top card first, and the card given
+// new position 0 goes on top (processor.cpp PROCESSOR_SORT_DECK).
+test("a sort says which end of the Deck is the top", () => {
+  const sort = prompt(YGOProMsgSortCard, {
+    player: 0, count: 2, cards: [{ code: ASH, ...where(0, C.LOCATION_DECK, 0) }, { code: MAXX, ...where(0, C.LOCATION_DECK, 1) }],
+  });
+  assert.match(sort.prompt.text, /option 1 is the current top card.*the first you list goes on top/i);
+});
+
 test("answers must fit the prompt: right field, option numbers in range, no repeats", () => {
   const built = prompt(YGOProMsgSelectCard, {
     player: 0, cancelable: 0, min: 1, max: 2, count: 2,

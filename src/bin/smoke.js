@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import { Client } from "@modelcontextprotocol/client";
@@ -146,6 +147,7 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// argv[1] keeps any symlink in the launch path; import.meta.url is the real path.
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await main();
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { subscribe, unsubscribe } from "node:diagnostics_channel";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -119,4 +119,22 @@ test("deck tools show, edit and import the working deck that the next submit sen
   const imported = JSON.parse((await call("deck_edit", { import: "ydke://o6lXBaOpVwVKcEkD!viOnAg==!ryPeAA==!", format: "json" })).text);
   assert.deepEqual(imported.counts, { main: 3, extra: 1, side: 1 });
   assert.equal((await call("deck_edit", {})).isError, true);
+});
+
+// A runtime may be given a path that runs through a symlink (macOS /tmp is
+// one); the entry point must still start rather than exit without a word.
+test("the seat starts when its path runs through a symlink", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "ygo-link-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const link = join(dir, "repo");
+  await symlink(ROOT, link, "dir");
+  const transport = new StdioClientTransport({
+    command: process.execPath, args: [join(link, "src/bin/seat.js")], cwd: dir, stderr: "pipe",
+    env: { YGO_ROOM: "M,TM0,NF#linktest", YGO_NAME: "link-seat", YGO_CARDS_DIR: join(ROOT, "data/cards"), YGO_RUN_DIR: join(dir, "runs"), YGO_LOG_LEVEL: "warn" },
+  });
+  const client = new Client({ name: "link-test", version: "0.0.0" });
+  t.after(() => client.close().catch(() => { }));
+  await client.connect(transport, { timeout: 20_000 });
+  const { tools } = await client.listTools();
+  assert.ok(tools.some((tool) => tool.name === "wait"));
 });

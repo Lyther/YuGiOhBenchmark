@@ -200,7 +200,7 @@ Exit gate: a fresh clone follows README to a passing smoke run; stale status tex
 - [ ] `P3.2` Upstream defect reports.
   - Scope: prepare reports for the `ygopro-msg-encode` `SELECT_SUM` padding and the `SELECT_COUNTER` matcher, each with a failing test.
   - Acceptance evidence: report text and tests ready. Filing upstream is an outward action and needs the user's go-ahead.
-  - Prepared 2026-10-07: [docs/upstream/ygopro-msg-encode.md](upstream/ygopro-msg-encode.md) and `spec/upstream-msg-encode.test.js`. These cover four defects: the two above, `SORT_CARD` writing the inverse order, and `SHUFFLE_SET_CARD` interleaving its two location arrays. Not filed.
+  - Prepared 2026-10-07: [docs/upstream/ygopro-msg-encode.md](upstream/ygopro-msg-encode.md) and `spec/upstream-msg-encode.test.js`. These cover four defects: the two above, `SORT_CARD` writing the inverse order, and `SHUFFLE_SET_CARD` interleaving its two location arrays. A fifth, `HandResult` naming Rock and Scissors the other way round, was added on 2026-10-21. Not filed.
   - Dependencies: P1.8.
 
 ## Later / Not Now

@@ -75,7 +75,7 @@ The seat reads only environment variables; [.env.example](.env.example) lists ev
 
 ## Tests
 
-`npm test` runs offline against the codec, card loader, board, prompts and controller. It includes authored card fixtures, constructed messages, a connection double, and captured sessions in `test/fixtures/sessions/`; these are diagnostics, not proof of live gameplay. It never contacts 2339. `npm run spec` runs the real seat's MCP entry point and tools, card lookups and deck edits against the card data that `npm run cards` downloaded, so run that first. `node --test spec/upstream-msg-encode.test.js` holds failing tests for [four codec defects](docs/upstream/ygopro-msg-encode.md) that the seat works around.
+`npm test` runs offline against the codec, card loader, board, prompts and controller. It includes authored card fixtures, constructed messages, a connection double, and captured sessions in `test/fixtures/sessions/`; these are diagnostics, not proof of live gameplay. It never contacts 2339. `npm run spec` runs the real seat's MCP entry point and tools, card lookups and deck edits against the card data that `npm run cards` downloaded, so run that first. `node --test spec/upstream-msg-encode.test.js` holds failing tests for [five codec defects](docs/upstream/ygopro-msg-encode.md) that the seat works around.
 
 ## Layout
 

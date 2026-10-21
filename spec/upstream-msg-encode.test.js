@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  HandResult,
   IndexResponse,
   YGOProMsgSelectCounter,
   YGOProMsgSelectSum,
@@ -12,7 +13,8 @@ import {
 // Failing tests for the upstream report in docs/upstream/ygopro-msg-encode.md.
 // Run alone with `node --test spec/upstream-msg-encode.test.js`; they stay RED
 // until ygopro-msg-encode 1.3.0 is fixed. The seat works around the response
-// encodings in prompts/selections.js and the shuffle decoder in packets.js.
+// encodings in prompts/selections.js, the shuffle decoder in packets.js and the
+// hand names in prompts/choices.js.
 const card = (code, sequence) => ({ code, controller: 0, location: 0x04, sequence });
 
 test("SELECT_SUM: chosen indices follow the mandatory slots, like the stock client", () => {
@@ -50,4 +52,9 @@ test("SHUFFLE_SET_CARD: old locations and new locations are separate arrays", ()
     oldLocation.controller, oldLocation.location, oldLocation.sequence,
     newLocation.controller, newLocation.location, newLocation.sequence,
   ]), [[1, 4, 0, 0, 0, 0], [1, 4, 3, 1, 4, 0]]);
+});
+
+test("HandResult: 1 is Scissors and 2 is Rock, as the server scores them", () => {
+  // single_duel.cpp lets 2 beat 1, 3 beat 2 and 1 beat 3; textures/f1-f3 are scissors, rock, paper.
+  assert.deepEqual({ scissors: HandResult.SCISSORS, rock: HandResult.ROCK, paper: HandResult.PAPER }, { scissors: 1, rock: 2, paper: 3 });
 });

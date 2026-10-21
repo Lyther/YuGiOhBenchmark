@@ -303,7 +303,7 @@ YuGiOhBenchmark/
     seat-entry.test.js                                 - GREEN: real MCP entry contract against the real seat; `npm run spec`, after `npm run cards`.
     tools.test.js                                      - GREEN: the tool list, deck startup, card lookups and deck tools of the real seat over stdio MCP, on the downloaded cards.
     catalog.test.js, deck.test.js                      - GREEN: card vocabulary, strings and names, deck placement and edits, on the downloaded cards.
-    upstream-msg-encode.test.js                        - RED on purpose: the four codec defects of D-02, for the upstream report.
+    upstream-msg-encode.test.js                        - RED on purpose: the codec defects of D-02 and the swapped hand names, for the upstream report.
   docs/upstream/ygopro-msg-encode.md                   - Prepared upstream report; filing needs the owner's go-ahead (P3.2).
   test/
     core-contract.test.js, log.test.js, config.test.js - VERIFIED_EXISTING core tests.

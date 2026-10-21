@@ -16,8 +16,8 @@ const CALL_TIMEOUT_MS = 90_000;
 const SEAT_WAIT_MS = "20000";
 const DEADLINE_MS = 10 * 60_000;
 const LOBBY_PROMPTS = new Set(["deck", "side", "rps", "first"]);
-// Different hands, so rock-paper-scissors never ties.
-const HANDS = Object.freeze({ a: 1, b: 3 });
+// Scissors for a and Rock for b: b wins rock-paper-scissors and goes first.
+const HANDS = Object.freeze({ a: 3, b: 1 });
 
 function say(line) {
   process.stdout.write(`${line}\n`);

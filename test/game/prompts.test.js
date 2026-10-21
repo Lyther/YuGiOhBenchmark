@@ -373,8 +373,8 @@ test("lobby prompts resolve to deck, hand and first-player actions", () => {
   const side = lobbyPrompt("side", { text: "Side" });
   assert.deepEqual(resolveAnswer(side, { submit: true }), { type: "deck" });
   const rps = lobbyPrompt("rps");
-  assert.deepEqual(resolveAnswer(rps, { choose: [1] }), { type: "hand", value: 1 });
-  assert.deepEqual(resolveAnswer(rps, { choose: [3] }), { type: "hand", value: 2 });
+  assert.deepEqual(resolveAnswer(rps, { choose: [1] }), { type: "hand", value: 2 });
+  assert.deepEqual(resolveAnswer(rps, { choose: [3] }), { type: "hand", value: 1 });
   const first = lobbyPrompt("first");
   assert.deepEqual(first.options.map((option) => option.label), ["Go first", "Go second"]);
   assert.deepEqual(resolveAnswer(first, { choose: [2] }), { type: "tp", goFirst: false });
@@ -419,6 +419,16 @@ test("a place answer names exactly the zones asked for", () => {
   const open = (sequences) => (~sequences.reduce((mask, sequence) => mask | (1 << sequence), 0)) >>> 0;
   const place = prompt(YGOProMsgSelectPlace, { player: 0, count: 1, flag: open([0, 2]) });
   assert.throws(() => resolveAnswer(place.prompt, { choose: [1, 2] }), /exactly 1/);
+});
+
+// ygopro's server lets 2 beat 1, 3 beat 2 and 1 beat 3 (single_duel.cpp), and
+// the stock client draws 1, 2, 3 as Scissors, Rock, Paper (textures/f1-f3).
+test("rock-paper-scissors options send the server's hand values: 1 Scissors, 2 Rock, 3 Paper", () => {
+  const lobby = lobbyPrompt("rps");
+  assert.deepEqual(lobby.options.map((option) => option.label), ["Rock", "Paper", "Scissors"]);
+  assert.deepEqual([1, 2, 3].map((n) => resolveAnswer(lobby, { choose: [n] }).value), [2, 3, 1]);
+  const duel = prompt(YGOProMsgRockPaperScissors, { player: 0 });
+  assert.deepEqual([1, 2, 3].map((n) => bytes(duel, { choose: [n] })[0]), [2, 3, 1]);
 });
 
 test("answers must fit the prompt: right field, option numbers in range, no repeats", () => {

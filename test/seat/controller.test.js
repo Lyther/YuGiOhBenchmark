@@ -280,7 +280,7 @@ test("rock-paper-scissors, first player, duel prompts, empty-chain auto-pass, ke
   assert.ok(hand instanceof YGOProCtosHandResult);
   assert.equal(hand.res, 3, "Paper");
   link.deliver(stocPacket(YGOProStocHandResult, { res1: 3, res2: 1 }));
-  assert.match(lastEvent(seat).text, /you Paper, opponent Rock/);
+  assert.match(lastEvent(seat).text, /you Paper, opponent Scissors/);
   link.deliver(stocPacket(YGOProStocSelectTp));
   await afterHand;
   assert.equal(seat.snapshot().phase, "first");
@@ -1057,4 +1057,14 @@ test("a rejoin drops a surrender's held prompt: the restore resends the pending 
   link.deliver(idle(0));
   assert.equal(await surrendered, "prompt");
   assert.notEqual(seat.snapshot().prompt.seq, held.seq, "the server's copy of the prompt");
+});
+
+test("the rock-paper-scissors result names the server's hands and the winner it picks", async (t) => {
+  const { seat, link } = await setup(t);
+  await joinRoom(seat, link);
+  // res1 is this seat's hand; the server lets 2 (Rock) beat 1 (Scissors).
+  link.deliver(stocPacket(YGOProStocHandResult, { res1: 2, res2: 1 }));
+  assert.match(lastEvent(seat).text, /you Rock, opponent Scissors \(you win\)/);
+  link.deliver(stocPacket(YGOProStocHandResult, { res1: 3, res2: 1 }));
+  assert.match(lastEvent(seat).text, /you Paper, opponent Scissors \(opponent wins\)/);
 });

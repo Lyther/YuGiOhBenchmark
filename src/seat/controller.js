@@ -796,7 +796,8 @@ class Seat {
   }
 
   #onHandResult({ res1, res2 }) {
-    const outcome = res1 === res2 ? "a tie, play again" : (res1 - res2 + 3) % 3 === 2 ? "you win" : "opponent wins";
+    // The server lets each value beat the one below it, and 1 beat 3.
+    const outcome = res1 === res2 ? "a tie, play again" : (res1 - res2 + 3) % 3 === 1 ? "you win" : "opponent wins";
     this.#event("lobby", `Rock-paper-scissors: you ${RPS_NAMES[res1]}, opponent ${RPS_NAMES[res2]} (${outcome})`);
   }
 

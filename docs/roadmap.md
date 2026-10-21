@@ -72,7 +72,7 @@ Exit gate:
   - Files: `src/cards/catalog.js`, `src/cards/strings-conf.js`, `src/cards/sources.js`, `src/bin/cards.js`, `test/cards/catalog.test.js`, `test/cards/sources.test.js`, `test/fixtures/cards.json`.
   - Scope:
     - Download the contract's source list as individual files to temporary names, then rename; no archives.
-    - The catalog merges zh-CN, super-pre, super-pre-en and en-US in that order (contracts.md Card Data Inputs), and provides `desc` mapping, name lookup and filter search.
+    - The catalog merges zh-CN, super-pre, super-pre-en and en-US in that order for text, and takes card data from the newest file (contracts.md Card Data Inputs), and provides `desc` mapping, name lookup and filter search.
     - The seat refuses to start without the en-US set, so this comes before any seat entry point.
   - Acceptance evidence: `npm test`. `npm run cards` populates `data/cards/` and prints counts. A known code resolves to English text. A super-pre code resolves to the English community text when it exists, otherwise to MyCard's Chinese text, and its card info names the source. A failed download leaves the old files.
   - Dependencies: P1.1.

@@ -233,7 +233,7 @@ The shape is a layered single process with a pure core. All game understanding (
   Options are numbered from 1 in message order and encoded through `IndexResponse`; `prompts/options.js` holds the shared labels and answer checks. Tribute, sum and counter options carry the numbers the server judges them by (D-05). Auto-answers follow AD-07, and each one is recorded as an event.
 - **Labels** (`game/labels.js`). These are pure naming helpers: zones (`your M3`, `opponent S2`, `EMZ left`), positions, phases, attributes, races, and the card label from board plus catalog, including the zeroed-code fallback (Q-04).
 - **Catalog** (`cards/catalog.js`, `cards/strings-conf.js`). It is read-only.
-  - At start it reads every available CDB through sql.js into in-memory maps, lowest priority first, so later rows replace earlier ones. The resulting priority is en-US, then super-pre English, then super-pre (MyCard, zh-CN), then zh-CN.
+  - At start it reads every available CDB through sql.js into in-memory maps, lowest priority first, so later rows replace earlier ones. The resulting text priority is en-US, then super-pre English, then super-pre (MyCard, zh-CN), then zh-CN. Card data (type, stats, archetype codes) instead follows the server, which loads its pre-release files over its base data: the newest of super-pre, super-pre English, en-US, zh-CN decides it, so en-US text can carry a `test-update.cdb` card's new archetype.
   - Then the CDBs inside any `first-edition/*.ypk` replace the text and non-empty effect strings of their cards. Names and stats stay.
   - Every card records its source, so card info can say where its text came from.
   - It offers:

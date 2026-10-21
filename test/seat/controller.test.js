@@ -1068,3 +1068,20 @@ test("the rock-paper-scissors result names the server's hands and the winner it 
   link.deliver(stocPacket(YGOProStocHandResult, { res1: 3, res2: 1 }));
   assert.match(lastEvent(seat).text, /you Paper, opponent Scissors \(opponent wins\)/);
 });
+
+test("a first connect that fails gives the deck prompt back, and the next submit joins", async (t) => {
+  const port = await closedPort();
+  let connects = 0;
+  const { seat, link, folder } = await setup(t, {
+    connect: (options, scripted) => (connects++ === 0 ? openConnection({ ...options, host: "127.0.0.1", port }) : scripted.connect(options)),
+  });
+  assert.equal(await seat.answer({ submit: true }), "prompt");
+  const view = seat.snapshot();
+  assert.equal(view.phase, "deck");
+  assert.match(view.prompt.rejected, /could not reach the server: .*ECONNREFUSED/);
+  assert.equal(view.disconnect, null);
+  await joinRoom(seat, link);
+  assert.equal(seat.snapshot().phase, "rps");
+  await seat.close();
+  assert.ok(!(await readFile(join(folder, "results.jsonl"), "utf8").catch(() => "")).includes("aborted"));
+});

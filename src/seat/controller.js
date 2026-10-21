@@ -162,6 +162,7 @@ class Seat {
   #generation = 0;
   #version;
   #joined = false;
+  #claimed = false;
   #versionRetried = false;
   #closing = false;
   // srvpro keeps a dropped seat only once a duel has started (duel_stage past
@@ -427,16 +428,20 @@ class Seat {
   async #join() {
     // Claim the run folder before contacting the server: a rerun or a seat
     // with a colliding name must not mix its files into another match's.
-    let found;
-    try {
-      found = this.#record.claim();
-    } catch (error) {
-      throw new SeatError(error.message);
+    // A submit after a failed first connect keeps the claim it already holds.
+    let found = null;
+    if (!this.#claimed) {
+      try {
+        found = this.#record.claim();
+      } catch (error) {
+        throw new SeatError(error.message);
+      }
+      this.#claimed = true;
     }
     this.#state.phase = "lobby";
     if (found) this.#resume(found);
     this.#state.submitted = copyDeck(this.#state.deck);
-    await this.#open(this.#config.version);
+    await this.#open(this.#versionRetried ? this.#version : this.#config.version);
   }
 
   // A restarted seat continues the match its folder holds (contracts.md
@@ -505,6 +510,7 @@ class Seat {
       });
     } catch (error) {
       if (this.#rejoin) this.#scheduleRejoin(`connect failed: ${error.message}`);
+      else if (!this.#started) this.#joinFailed(`could not reach the server: ${error.message}`);
       else this.#disconnect(`connect failed: ${error.message}`);
       return;
     }
@@ -628,6 +634,15 @@ class Seat {
     this.#rejoin = null;
     clearTimeout(this.#rejoinTimer);
     clearTimeout(this.#restoreTimer);
+  }
+
+  // Nothing on the server holds this seat before its first duel, so a failed
+  // connect is not the end of the match: the deck prompt comes back.
+  #joinFailed(reason) {
+    this.#connection = null;
+    this.#state.phase = "deck";
+    this.#event("rejected", reason);
+    this.#setPrompt({ ...lobbyPrompt("deck", { text: this.#deckText() }), rejected: `${reason}; submit again to retry` });
   }
 
   #disconnect(reason) {

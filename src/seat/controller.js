@@ -40,7 +40,15 @@ import {
 // A seat-state problem a tool reports as isError; nothing is sent.
 export class SeatError extends Error { }
 
+const BUSY = "a call is already waiting; let it return first";
+
 const REPLAY_GRACE_MS = 15_000;
+// srvpro's side_timeout: 2339 says "3 minutes" when a side deck is due, repeats
+// it as 2 and 1 minute, and at the third minute removes the seat, which loses
+// the match with no reconnect hold (system_kicked). The timer runs on through a
+// rejoin, so the seat keeps the first deadline, across a restart too. The seat
+// only reports it.
+const SIDE_LIMIT_MS = 180_000;
 // A lost connection is rejoined with backoff 1, 2, 4, 8, 16, 16 s, each with
 // jitter in [0.5, 1.5): about 47 s, inside srvpro's reconnect wait (90 s by
 // default; 2339 held a dropped seat for 298 s on 2026-10-08).
@@ -59,6 +67,11 @@ const RESTORE_MS = 15_000;
 // (srvpro ctos_follow 'SURRENDER') is never passed on, and the duel still
 // waits on the pending prompt.
 const SURRENDER_GRACE_MS = 10_000;
+// srvpro drops a client that has sent nothing for 5 minutes (client.setTimeout
+// 300000), and on 2339 the opponent then wins the match. A seat sends nothing
+// while either model thinks, so after a minute of silence it sends a
+// TIME_CONFIRM, which a room with no clock ignores.
+const KEEPALIVE_MS = 60_000;
 const OBSERVER = 7;
 const LOST_CONNECTION = 0x4;
 // Control characters and Unicode line and paragraph separators.
@@ -157,11 +170,13 @@ class Seat {
     [YGOProMsgRetry, (seat) => seat.#onRetry()],
   ]);
 
-  #config; #catalog; #record; #connect; #log; #graceMs; #random; #rejoinBaseMs; #restoreMs; #surrenderGraceMs;
+  #config; #catalog; #record; #connect; #log; #graceMs; #random; #rejoinBaseMs; #restoreMs; #surrenderGraceMs; #keepaliveMs; #now; #sideLimitMs;
+  #keepaliveTimer = null;
   #connection = null;
   #generation = 0;
   #version;
   #joined = false;
+  #claimed = false;
   #versionRetried = false;
   #closing = false;
   // srvpro keeps a dropped seat only once a duel has started (duel_stage past
@@ -182,6 +197,8 @@ class Seat {
   #ready = [false, false];
   #startSent = false;
   #waiter = null;
+  #sending = false;
+  #side = null;
   #replayTimer = null;
   #duelsPlayed = 0;
   #replaysReceived = 0;
@@ -196,7 +213,7 @@ class Seat {
 
   constructor({
     config, catalog, deck, record, connect, log, replayGraceMs = REPLAY_GRACE_MS, rejoinBaseMs = REJOIN_BASE_MS, random = Math.random,
-    restoreMs = RESTORE_MS, surrenderGraceMs = SURRENDER_GRACE_MS,
+    restoreMs = RESTORE_MS, surrenderGraceMs = SURRENDER_GRACE_MS, keepaliveMs = KEEPALIVE_MS, now = Date.now, sideLimitMs = SIDE_LIMIT_MS,
   }) {
     this.#config = config;
     this.#catalog = catalog;
@@ -207,6 +224,9 @@ class Seat {
     this.#rejoinBaseMs = rejoinBaseMs;
     this.#restoreMs = restoreMs;
     this.#surrenderGraceMs = surrenderGraceMs;
+    this.#keepaliveMs = keepaliveMs;
+    this.#now = now;
+    this.#sideLimitMs = sideLimitMs;
     this.#random = random;
     this.#state = {
       phase: "deck", room: config.room, name: config.name, host: false, opponent: null, opponentReady: false,
@@ -230,20 +250,31 @@ class Seat {
     return this.#state;
   }
 
+  // Milliseconds the server still waits for a side deck, or null when none is due.
+  sideLeftMs() {
+    return this.#state.prompt?.kind === "side" && this.#side ? Math.max(0, this.#side.ends - this.#now()) : null;
+  }
+
   markDelivered({ event, boardVersion }) {
     const delivered = this.#state.delivered;
     delivered.event = Math.max(delivered.event, event);
     delivered.boardVersion = Math.max(delivered.boardVersion, boardVersion);
   }
 
-  async wait() {
-    if (this.#waiter) return Promise.reject(new SeatError("a call is already waiting; let it return first"));
+  // A runtime that gives up on a call aborts its signal: the seat is free at
+  // once, and nothing the call would have shown counts as delivered.
+  async wait({ signal } = {}) {
+    if (this.#waiter || this.#sending) return Promise.reject(new SeatError(BUSY));
+    if (signal?.aborted) return "cancelled";
     const ready = this.#readyReason();
     const reason = ready ?? await new Promise((resolve) => {
       const timer = setTimeout(() => this.#wake("timeout"), this.#config.waitMs);
       timer.unref?.();
-      this.#waiter = { resolve, timer };
+      const onAbort = () => this.#wake("cancelled");
+      signal?.addEventListener("abort", onAbort, { once: true });
+      this.#waiter = { resolve, timer, signal, onAbort };
     });
+    if (reason === "cancelled") return reason;
     // A chat or prompt can wake this call earlier in the same packet batch
     // that ends the match. Check the final state before returning any view.
     if (this.#state.phase === "ended") {
@@ -253,7 +284,7 @@ class Seat {
     return reason;
   }
 
-  async answer(answer) {
+  async answer(answer, { signal } = {}) {
     this.#requireIdle();
     this.#requireLive();
     const prompt = this.#state.prompt;
@@ -261,13 +292,18 @@ class Seat {
     const action = resolveAnswer(prompt, answer);
     this.#state.prompt = null;
     this.#state.lastPrompt = prompt;
+    // The first submit connects before it waits; a call that arrives in that
+    // window would take the waiter slot and make this one fail after sending.
+    this.#sending = true;
     try {
       await this.#perform(action, prompt);
     } catch (error) {
       if (!this.#state.prompt && this.#state.phase !== "disconnected") this.#state.prompt = prompt;
       throw error;
+    } finally {
+      this.#sending = false;
     }
-    return this.wait();
+    return this.wait({ signal });
   }
 
   chat(text) {
@@ -278,13 +314,13 @@ class Seat {
     return { sent: text };
   }
 
-  surrender() {
+  surrender({ signal } = {}) {
     this.#requireIdle();
     this.#requireLive();
     if (this.#state.phase !== "duel") throw new SeatError(`surrender works only during a duel (phase ${this.#state.phase})`);
     this.#send(encodeSurrender());
     this.#holdPrompt();
-    return this.wait();
+    return this.wait({ signal });
   }
 
   // The pending prompt is put away until the duel ends, and given back if it
@@ -326,6 +362,7 @@ class Seat {
     clearTimeout(this.#rejoinTimer);
     clearTimeout(this.#restoreTimer);
     clearTimeout(this.#held?.timer);
+    clearTimeout(this.#keepaliveTimer);
     const { phase, match } = this.#state;
     const resumable = this.#started && phase !== "ended" && phase !== "disconnected";
     if (resumable) this.#writeResult({ type: "interrupted", phase, duel: match.duel, turn: this.#state.board?.turn ?? 0, reason: why });
@@ -358,11 +395,12 @@ class Seat {
     if (!waiter) return;
     this.#waiter = null;
     clearTimeout(waiter.timer);
+    waiter.signal?.removeEventListener("abort", waiter.onAbort);
     waiter.resolve(reason);
   }
 
   #requireIdle() {
-    if (this.#waiter) throw new SeatError("a call is already waiting; let it return first");
+    if (this.#waiter || this.#sending) throw new SeatError(BUSY);
   }
 
   #requireLive() {
@@ -386,12 +424,16 @@ class Seat {
   #deckText() {
     if (this.#resumeNote) return this.#resumeNote;
     const { main, extra, side } = this.#state.deck;
-    return `Your deck: Main ${main.length}, Extra ${extra.length}, Side ${side.length} (the server checks it). Submit it to join the room.`;
+    // 2339 enforces these without a banlist (3 copies verified live on 2026-10-21).
+    return `Your deck: Main ${main.length}, Extra ${extra.length}, Side ${side.length}. The server allows Main 40 to 60 cards, Extra up to 15, `
+      + "Side up to 15, at most 3 copies of a card, and checks the deck when you submit. Submit it to join the room.";
   }
 
   #sideText() {
     const last = this.#state.match.results.at(-1);
-    return `Duel ${this.#state.match.duel} is over (${last?.result ?? "no result"}). Side Deck: submit your deck as it is, or edit it first.`;
+    const minutes = this.#sideLimitMs / 60_000;
+    return `Duel ${this.#state.match.duel} is over (${last?.result ?? "no result"}). Side Deck: submit your deck as it is, or edit it first. `
+      + `The server allows ${minutes} minutes; after that it removes the seat and the opponent wins the match.`;
   }
 
   // Sending ------------------------------------------------------------------
@@ -399,6 +441,15 @@ class Seat {
   #send(bytes) {
     if (!this.#connection || this.#connection.closed) throw new SeatError(this.#rejoin ? REJOINING : "not connected");
     this.#connection.send(bytes);
+    // srvpro times out silence, so every packet sent starts the count again.
+    clearTimeout(this.#keepaliveTimer);
+    this.#keepaliveTimer = setTimeout(() => this.#keepalive(), this.#keepaliveMs);
+    this.#keepaliveTimer.unref?.();
+  }
+
+  #keepalive() {
+    if (this.#closing || !this.#joined || this.#rejoin || this.#state.phase === "ended") return;
+    if (this.#connection && !this.#connection.closed) this.#send(encodeTimeConfirm());
   }
 
   async #perform(action, prompt) {
@@ -427,22 +478,27 @@ class Seat {
   async #join() {
     // Claim the run folder before contacting the server: a rerun or a seat
     // with a colliding name must not mix its files into another match's.
-    let found;
-    try {
-      found = this.#record.claim();
-    } catch (error) {
-      throw new SeatError(error.message);
+    // A submit after a failed first connect keeps the claim it already holds.
+    let found = null;
+    if (!this.#claimed) {
+      try {
+        found = this.#record.claim();
+      } catch (error) {
+        throw new SeatError(error.message);
+      }
+      this.#claimed = true;
     }
     this.#state.phase = "lobby";
     if (found) this.#resume(found);
     this.#state.submitted = copyDeck(this.#state.deck);
-    await this.#open(this.#config.version);
+    await this.#open(this.#versionRetried ? this.#version : this.#config.version);
   }
 
   // A restarted seat continues the match its folder holds (contracts.md
   // Rejoin): results, decks and replay count come back from the folder.
-  #resume({ started, duel, turn, results, decks, replays }) {
+  #resume({ started, duel, turn, side, results, decks, replays }) {
     const { match } = this.#state;
+    this.#side = side;
     match.results = results.map(({ duel: number, result, reason, reasonCode, turns, first }) => ({ duel: number, result, reason, reasonCode, turns, first }));
     match.score = scoreOf(match.results);
     // seat.json names the last duel that started, finished or not.
@@ -505,6 +561,7 @@ class Seat {
       });
     } catch (error) {
       if (this.#rejoin) this.#scheduleRejoin(`connect failed: ${error.message}`);
+      else if (!this.#started) this.#joinFailed(`could not reach the server: ${error.message}`);
       else this.#disconnect(`connect failed: ${error.message}`);
       return;
     }
@@ -628,6 +685,15 @@ class Seat {
     this.#rejoin = null;
     clearTimeout(this.#rejoinTimer);
     clearTimeout(this.#restoreTimer);
+  }
+
+  // Nothing on the server holds this seat before its first duel, so a failed
+  // connect is not the end of the match: the deck prompt comes back.
+  #joinFailed(reason) {
+    this.#connection = null;
+    this.#state.phase = "deck";
+    this.#event("rejected", reason);
+    this.#setPrompt({ ...lobbyPrompt("deck", { text: this.#deckText() }), rejected: `${reason}; submit again to retry` });
   }
 
   #disconnect(reason) {
@@ -796,7 +862,8 @@ class Seat {
   }
 
   #onHandResult({ res1, res2 }) {
-    const outcome = res1 === res2 ? "a tie, play again" : (res1 - res2 + 3) % 3 === 2 ? "you win" : "opponent wins";
+    // The server lets each value beat the one below it, and 1 beat 3.
+    const outcome = res1 === res2 ? "a tie, play again" : (res1 - res2 + 3) % 3 === 1 ? "you win" : "opponent wins";
     this.#event("lobby", `Rock-paper-scissors: you ${RPS_NAMES[res1]}, opponent ${RPS_NAMES[res2]} (${outcome})`);
   }
 
@@ -812,6 +879,12 @@ class Seat {
     this.#missedDuel();
     this.#sideSubmitted = false;
     this.#state.phase = "side";
+    // A CHANGE_SIDE resent by a rejoin's restore keeps the deadline it set.
+    const duel = this.#state.match.duel;
+    if (this.#side?.duel !== duel) {
+      this.#side = { duel, ends: this.#now() + this.#sideLimitMs };
+      this.#checkpoint({ side: this.#side });
+    }
     this.#setPrompt(lobbyPrompt("side", { text: this.#sideText() }));
   }
 

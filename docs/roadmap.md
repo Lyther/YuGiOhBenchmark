@@ -72,7 +72,7 @@ Exit gate:
   - Files: `src/cards/catalog.js`, `src/cards/strings-conf.js`, `src/cards/sources.js`, `src/bin/cards.js`, `test/cards/catalog.test.js`, `test/cards/sources.test.js`, `test/fixtures/cards.json`.
   - Scope:
     - Download the contract's source list as individual files to temporary names, then rename; no archives.
-    - The catalog merges zh-CN, super-pre, super-pre-en and en-US in that order (contracts.md Card Data Inputs), and provides `desc` mapping, name lookup and filter search.
+    - The catalog merges zh-CN, super-pre, super-pre-en and en-US in that order for text, and takes card data in the server's load order (contracts.md Card Data Inputs), and provides `desc` mapping, name lookup and filter search.
     - The seat refuses to start without the en-US set, so this comes before any seat entry point.
   - Acceptance evidence: `npm test`. `npm run cards` populates `data/cards/` and prints counts. A known code resolves to English text. A super-pre code resolves to the English community text when it exists, otherwise to MyCard's Chinese text, and its card info names the source. A failed download leaves the old files.
   - Dependencies: P1.1.
@@ -200,7 +200,7 @@ Exit gate: a fresh clone follows README to a passing smoke run; stale status tex
 - [ ] `P3.2` Upstream defect reports.
   - Scope: prepare reports for the `ygopro-msg-encode` `SELECT_SUM` padding and the `SELECT_COUNTER` matcher, each with a failing test.
   - Acceptance evidence: report text and tests ready. Filing upstream is an outward action and needs the user's go-ahead.
-  - Prepared 2026-10-07: [docs/upstream/ygopro-msg-encode.md](upstream/ygopro-msg-encode.md) and `spec/upstream-msg-encode.test.js`. These cover four defects: the two above, `SORT_CARD` writing the inverse order, and `SHUFFLE_SET_CARD` interleaving its two location arrays. Not filed.
+  - Prepared 2026-10-07: [docs/upstream/ygopro-msg-encode.md](upstream/ygopro-msg-encode.md) and `spec/upstream-msg-encode.test.js`. These cover four defects: the two above, `SORT_CARD` writing the inverse order, and `SHUFFLE_SET_CARD` interleaving its two location arrays. A fifth, `HandResult` naming Rock and Scissors the other way round, was added on 2026-10-21. Not filed.
   - Dependencies: P1.8.
 
 ## Later / Not Now
@@ -208,7 +208,7 @@ Exit gate: a fresh clone follows README to a passing smoke run; stale status tex
 - Narration, public rankings, RL training, cross-game memory. Deferred by the concept; reopen only with a concept change.
 - Bo1 rooms. Trigger: a Bo1 experiment. Only the room string changes (drop the `M`); the seat follows the server's match end and assumes no number of duels.
 - Batched results with a "more events waiting" note. Trigger: a runtime whose output limit cannot be raised. Every current runtime's limit is configurable (architecture D-01, AD-13).
-- A dedicated 15-minute hold run (Q-02). Trigger: an idle disconnect in an agent match.
+- A dedicated 15-minute hold run (Q-02). Trigger: an idle disconnect in an agent match. It fired on 2026-10-21: srvpro drops a client silent for 5 minutes. The seat now sends a keepalive, and a 330 s hold passed on 2339; the 15-minute run itself is still to do.
 - A multi-match runner or scheduler. Trigger: more than a handful of matches per day. Deferred because two terminal commands per match are enough.
 - A licensed or official English source for pre-release cards. Trigger: community translations misleading agents, or a need to redistribute card text.
 - A type checker (`tsc --checkJs`). Trigger: DTO drift causing defects.

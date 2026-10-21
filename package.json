@@ -14,6 +14,7 @@
     "cards": "node src/bin/cards.js",
     "seat": "node src/bin/seat.js",
     "smoke": "node src/bin/smoke.js",
+    "droid-agent": "node src/bin/droid-agent.js",
     "spec": "node --test spec/seat-entry.test.js spec/tools.test.js spec/catalog.test.js spec/deck.test.js"
   },
   "dependencies": {

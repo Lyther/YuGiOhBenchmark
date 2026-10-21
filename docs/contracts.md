@@ -97,7 +97,7 @@ Not stored anywhere: model reasoning, tool-call history (the runtime keeps it), 
 
 ## Persistent Data
 
-`record.js` is the only writer. All files are append-only or write-once, except `seat.json`, which is replaced atomically. Write-once files are written under a temporary name and linked into place, so a hard stop leaves the whole file or none. The seat reads its folder back only to resume an interrupted match (Rejoin).
+`record.js` is the only writer. All files are append-only or write-once, except `seat.json`, which is replaced atomically. Write-once files are written under a temporary name and linked into place, so a hard stop leaves the whole file or none. The seat reads its folder back only to resume an interrupted match (Rejoin). The Droid hook `bin/steer.js` reads it too, never writing: `started` in `seat.json` and whether `results.jsonl` holds a `match` or `aborted` line.
 
 - **Folder:** `<YGO_RUN_DIR>/<roomId>/<name>/`.
   - `roomId` is the part of `YGO_ROOM` after `#`.
@@ -106,7 +106,7 @@ Not stored anywhere: model reasoning, tool-call history (the runtime keeps it), 
     - no folder: it is created;
     - a folder whose `seat.json` names a seat process that has exited, with no `match` or `aborted` line: the new seat takes it over and resumes that match (a folder left before any duel started is reused afresh, its lobby deck file dropped);
     - otherwise the submit fails with the reason and nothing is sent: the owning seat is still running (a colliding seat), the match is over (a rerun), or the folder holds no `seat.json`.
-- **`seat.json`.** The resume checkpoint, replaced atomically: `{"pid":4242,"started":true,"duel":2,"turn":5}`. It is written at the claim, at the first `DUEL_START` (`started`: srvpro now holds the seat on a drop), at each `MSG_START` and at each new turn, because a rejoin's field reload carries no turn count. A reload's `MSG_RELOAD_FIELD` writes the restored duel and turn; the `MSG_NEW_TURN` inside the reload is no new turn.
+- **`seat.json`.** The resume checkpoint, replaced atomically: `{"pid":4242,"started":true,"duel":2,"turn":5,"side":null}`. `side` is the side deadline `{"duel":1,"ends":<epoch ms>}` set by the first `CHANGE_SIDE` after a duel, so a restarted seat keeps it. It is written at the claim, at the first `DUEL_START` (`started`: srvpro now holds the seat on a drop), at each `MSG_START` and at each new turn, because a rejoin's field reload carries no turn count. A reload's `MSG_RELOAD_FIELD` writes the restored duel and turn; the `MSG_NEW_TURN` inside the reload is no new turn.
 - **`results.jsonl`.** UTF-8, one JSON object per line, append-only (when a seat resumes, a last line without its newline gets one if it parses and is cut off if not):
   - `{"type":"duel","room":"M,TM0,NF#abc123","duel":1,"result":"win","reason":"LP reached 0","reasonCode":1,"turns":7,"first":true,"at":"2026-10-07T12:00:00.000Z"}`
   - `{"type":"match","room":"M,TM0,NF#abc123","result":"win","score":{"me":2,"opponent":1,"draws":0},"opponent":"gpt-seat","at":"…"}`, written once when the server ends the match, whether that took one, two or three duels.
@@ -154,7 +154,8 @@ Rules shared by all tools:
   - Seat-state errors return `isError: true` with one sentence and a `next` hint. The cases are: no pending prompt, an answer field that does not fit the prompt kind, an option number out of range, an unknown card name in a deck edit, chat while not connected, an answer, chat or surrender while the seat is rejoining, or a tool called after `disconnected`.
   - Server rejections are never tool errors. They come back as the next prompt with `rejected`.
 - **Annotations.** `deck_show`, `card` and `card_search` declare `readOnlyHint: true`; the other tools declare none. Approval is configured in the runtime (architecture Operations), not inferred from hints.
-- **Concurrency.** At most one blocking call (`wait`, `answer`, `surrender`) runs at a time per seat. A second one returns an `isError` that says a call is already waiting. `deck_show`, `deck_edit`, `card`, `card_search` and `chat` can run at any time, including while a `wait` is blocked.
+- **Concurrency.** At most one blocking call (`wait`, `answer`, `surrender`) runs at a time per seat. A second one returns an `isError` that says a call is already waiting; so does any `wait`, `answer` or `surrender` that arrives while an answer is still being sent (the first submit connects first, so that window is about one round trip). A blocking call the runtime cancels frees the seat at once and marks nothing delivered, so the next call shows what it would have shown. `deck_show`, `deck_edit`, `card`, `card_search` and `chat` can run at any time, including while a `wait` is blocked.
+- **Side time.** srvpro gives a seat 3 minutes from `CHANGE_SIDE` to send its side deck (2339 announces it, then 2 and 1 minutes), and then removes it: the opponent wins the match and the seat cannot rejoin (`system_kicked` blocks the reconnect hold). The seat can only tell the model, and only in a result it returns. The side prompt states the limit. While a side deck is due, `next` of every SeatView and the text result of every other tool (`deck_show`, `deck_edit`, `card`, `card_search`, `chat`) end with the time left, turning into a plain "submit now" in the last 60 s. The JSON results of the other tools and the `ydk`/`ydke`/`code` exports are not changed, and nothing is sent to a model that is not calling a tool. A refused side deck keeps the original deadline, and so does a rejoin or a restarted seat: the rejoin's restore resends `CHANGE_SIDE`, but srvpro's timer runs on from the first one (on 2339 a seat that rejoined 62 s into siding was removed at 180 s, `sw26294299`), so the seat keeps the deadline that first `CHANGE_SIDE` set, through `seat.json` after a restart. The seat that was removed records `aborted` (it sees a closed socket); the server's own score is a loss.
 
 ### `wait`
 
@@ -178,6 +179,7 @@ Rules shared by all tools:
   - The seat checks that the field fits the pending prompt's kind (see Answers) and that the numbers are in range.
   - It encodes the answer (or, for `deck`/`side`, sends the working deck), clears the prompt, then waits exactly as `wait` does.
   - A `MSG_RETRY`, `DECKERROR` or `SIDEERROR` reply comes back as the re-issued prompt with `rejected` set.
+  - If the first deck submit cannot reach the server, the deck prompt comes back with the reason in `rejected`, and the next submit tries again. Nothing is recorded; srvpro holds no seat before the first duel.
 - **Result:** SeatView.
 
 ### `deck_show`
@@ -185,7 +187,7 @@ Rules shared by all tools:
 - **Input:** `{format?: "text" | "json" | "ydk" | "ydke" | "code"}`.
 - **Result:**
   - `text`/`json`: a DeckView of the working deck.
-  - `ydk`/`ydke`/`code`: the export string, via `ygopro-deck-encode`.
+  - `ydk`/`ydke`/`code`: the export string, via `ygopro-deck-encode`. A deck code holds at most 4 copies of a card, so a working deck with more (deck edits allow up to 60, though the server refuses more than 3) is refused with that reason (`isError`); `ydk` and `ydke` carry any count.
 
 ### `deck_edit`
 
@@ -193,7 +195,7 @@ Rules shared by all tools:
   - `Edit` is `{card: int | string, count?: 1..60, section?: "main" | "extra" | "side"}`.
   - `Move` is `{card: int | string, count?: int, from: section, to: section}`.
 - **Behavior:**
-  - `import` replaces the deck and accepts YDK text, a `ydke://` URL or a KoishiPro deck code.
+  - `import` replaces the deck and accepts YDK text, a `ydke://` URL or a KoishiPro deck code. A deck code must decode to whole 4-byte card entries; a word or a cut-off code is refused. A YDK card line may carry text after the code (`14558127 # Ash Blossom`), as in ygopro.
   - A name must resolve to exactly one catalog card (case-insensitive exact name, then a unique prefix). Otherwise the call is an error that lists up to 5 suggestions.
   - `add` without a section puts Fusion/Synchro/Xyz/Link cards in extra and everything else in main.
   - Edits are allowed in any phase; only the submitted deck matters. A join, including a rejoin before the first duel, sends the deck last submitted, never later edits.
@@ -234,7 +236,7 @@ Rules shared by all tools:
   - `prompt: PromptView | null`.
   - `waiting`: `opponent | server | rejoin | null`.
   - `disconnected`: a reason or null.
-  - `next`: one imperative sentence telling the model what to call.
+  - `next`: one imperative sentence telling the model what to call. While a side deck is due it also says how long the server still waits (see Side time).
 - **BoardView.**
   - `duel`, `turn`, `phase`, `turnPlayer`, `lp: {you, opponent}`.
   - `you: SideView` and `opponent: SideView`.
@@ -266,7 +268,7 @@ The `kind` values are closed. Each row gives the answer field, what the server a
 | Kind | Source | Answer | Auto when |
 |---|---|---|---|
 | `deck`, `side` | seat / `CHANGE_SIDE` | `submit` | never |
-| `rps` | `SELECT_HAND`, `MSG_ROCK_PAPER_SCISSORS` | `choose` 1 of Rock, Paper, Scissors | never |
+| `rps` | `SELECT_HAND`, `MSG_ROCK_PAPER_SCISSORS` | `choose` 1 of Rock, Paper, Scissors, sent as the server's 2, 3, 1 (upstream report, defect 5) | never |
 | `first` | `SELECT_TP` | `choose` 1 of Go first, Go second | never |
 | `command` | `SELECT_IDLECMD` | `choose` 1 | never |
 | `battle` | `SELECT_BATTLECMD` | `choose` 1 | never |
@@ -277,9 +279,9 @@ The `kind` values are closed. Each row gives the answer field, what the server a
 | `tribute` | `SELECT_TRIBUTE` | `choose` at most `max` cards whose `tributes` add up to at least `min`, or `cancel` if cancelable | every card counts as 1 tribute, `min` = `max` = number of cards, not cancelable |
 | `unselect` | `SELECT_UNSELECT_CARD` | `choose` 1, or `finish` / `cancel` when allowed | never |
 | `sum` | `SELECT_SUM` | `choose` the non-mandatory cards; each card, mandatory ones included, counts as one of its `values`. `exactly`: `min`..`max` chosen cards whose total can equal `sumTarget`. `at least`: the total reaches `sumTarget` with no spare card. Mandatory cards are in `mustInclude` | never |
-| `sort` | `SORT_CARD` | `choose` all options in the new order, or `cancel` to keep the order; the seat sends each card's new position, as ocgcore reads it | one card |
+| `sort` | `SORT_CARD` | `choose` all options in the new order, or `cancel` to keep the order. Option 1 is the current top card of the Deck, and the first one listed goes on top; the seat sends each card's new position, as ocgcore reads it | one card |
 | `counter` | `SELECT_COUNTER` | `counts` adding up to `total`, each at most that card's `counters` | one card |
-| `place` | `SELECT_PLACE`, `SELECT_DISFIELD` | `choose` `min` zones. A server count of 0 (setting a Spell/Trap) means 1 zone or `cancel`; the seat sends a cancel as `[player, 0, 0]` | exactly `min` zones available, not cancelable |
+| `place` | `SELECT_PLACE`, `SELECT_DISFIELD` | `choose` exactly `min` zones. A server count of 0 (setting a Spell/Trap) means 1 zone or `cancel`; the seat sends a cancel as `[player, 0, 0]` | exactly `min` zones available, not cancelable |
 | `position` | `SELECT_POSITION` | `choose` 1 | one position |
 | `race`, `attribute` | `ANNOUNCE_RACE`, `ANNOUNCE_ATTRIB` | `choose` exactly `min` | available = `min` |
 | `number` | `ANNOUNCE_NUMBER` | `choose` 1 | one number |
@@ -289,14 +291,14 @@ For `tribute`, `min` is a tribute total and `max` a card count. A card worth two
 
 `choose: []` submits zero cards for card, tribute and sum selections. It is distinct from cancellation; the server decides whether the empty selection is legal, including a sum met by mandatory cards alone.
 
-Every automatic answer appends an `auto` event naming what was chosen. The seat also answers `STOC_TIME_LIMIT` with `CTOS_TIME_CONFIRM` and, as host, sends `HS_START`; neither produces an event.
+Every automatic answer appends an `auto` event naming what was chosen. The seat also answers `STOC_TIME_LIMIT` with `CTOS_TIME_CONFIRM` and, as host, sends `HS_START`; neither produces an event. After 60 s in which it has sent nothing, a joined seat sends `CTOS_TIME_CONFIRM` on its own, also without an event: srvpro drops a client that is silent for 5 minutes, and on 2339 its opponent then wins the match. A room with no clock ignores the packet.
 
 ## Mapping and Validation Ownership
 
 - **SeatView** is built by `seat/view.js` from Seat, Board and Prompt.
   - `board` comes from `board.js` state, with absolute player ids converted to `you` / `opponent`.
   - `events` are all Events with `seq` greater than `delivered.event`.
-  - `next` is derived from phase and prompt.
+  - `next` is derived from phase and prompt, and from the side time left.
 - **PromptView** omits `source` and every Option's `ref`.
   - Labels come from `labels.js` and the catalog. A zeroed code is resolved through the board; if that fails, the label is `face-down card` plus the zone.
   - `tributes`, `values` and `counters` are copied from the message, with `values` split as ocgcore's `get_sum_params` does.
@@ -355,7 +357,7 @@ zh-CN/cards.cdb, zh-CN/strings.conf
     https://raw.githubusercontent.com/mycard/ygopro-database/master/locales/zh-CN/{cards.cdb,strings.conf}
 ```
 
-- **Merge order.** The catalog merges cards lowest priority first, so later rows replace earlier ones: zh-CN, super-pre (release then update), super-pre-en, en-US. A code is described by the highest-priority source that has it.
+- **Merge order.** The catalog merges cards lowest priority first, so later rows replace earlier ones, in two orders. A card's text (name, effect text, strings, and the `source` it names) comes from the highest-priority source that has the code: zh-CN, super-pre (release then update), super-pre-en, en-US. A card's data (alias, type, level, attribute, race, ATK, DEF, scales, link markers and archetype codes) follows the server's load order instead, a fixed source order that never looks at file dates: the server loads its pre-release files over its base data, so the last of zh-CN, en-US, super-pre-en, super-pre (release then update) that has the code decides it. A card in en-US that `test-update.cdb` changes keeps its English text and takes the update's data.
 - **Strings.** `strings.conf` files merge the same way. `test-strings.conf` only adds setnames and counters.
 - **Missing files.** A missing en-US set is fatal at seat start. Any other missing set is logged and skipped.
 - **Failed refresh.** Each file is downloaded with a 5-minute timeout and up to three attempts with jittered backoff (server errors only), staged under a temporary name, and renamed into place only after the whole set for that source arrives. A file must also look like what it claims to be: a `.cdb` starts with the SQLite header, a strings file has `!` entries, and nothing is over 64 MiB, counted as the bytes arrive so a body with no length cannot grow past it. That way an error page or captive portal answering 200 cannot replace good data. On failure the previous files stay. At seat start, an unreadable optional database is logged and skipped; an unreadable en-US one stops the seat and names `npm run cards`. Behind an HTTP proxy, run with `NODE_USE_ENV_PROXY=1`.
@@ -376,9 +378,9 @@ zh-CN/cards.cdb, zh-CN/strings.conf
 ```text
 Phase: deck · room M,TM0,NF#abc123 · you: opus-seat
 Prompt 1 · deck
-Build your deck: Main 40–60, Extra ≤15, Side ≤15 (the server checks it). Use card_search, card and deck_edit; deck_show to review.
+Your deck: Main 0, Extra 0, Side 0. The server allows Main 40 to 60 cards, Extra up to 15, Side up to 15, at most 3 copies of a card, and checks the deck when you submit. Submit it to join the room.
 Answer: answer {"submit": true}
-Next: build the deck, then submit.
+Next: Submit your deck: answer {"submit": true}.
 ```
 
 `answer` returning a command prompt (text, abridged):

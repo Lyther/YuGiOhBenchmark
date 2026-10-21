@@ -2,7 +2,7 @@ import { YGOProMsgSelectDisField, YGOProMsgSelectPlace } from "ygopro-msg-encode
 
 import { ZONE_NAMES, who } from "../board.js";
 import { zoneLabel } from "../labels.js";
-import { answerField, chooseMany, hintText, numbered, response } from "./options.js";
+import { AnswerError, answerField, chooseMany, hintText, numbered, response } from "./options.js";
 
 function placeLabel(context, { player, location, sequence }) {
   const side = context.board ? who(context.board, player) : player === context.me ? "me" : "opponent";
@@ -28,7 +28,10 @@ function places(message, context) {
 function encodePlaces(prompt, answer) {
   const field = answerField(prompt, answer, prompt.cancelable ? ["choose", "cancel"] : ["choose"]);
   if (field === "cancel") return response([prompt.source.player, 0, 0]);
-  return response(prompt.source.prepareResponse(chooseMany(prompt, answer.choose).map((index) => prompt.refs[index])));
+  // ocgcore reads only the zones it asked for and ignores any more.
+  const chosen = chooseMany(prompt, answer.choose);
+  if (chosen.length !== prompt.min) throw new AnswerError(`choose exactly ${prompt.min} zone${prompt.min === 1 ? "" : "s"}`);
+  return response(prompt.source.prepareResponse(chosen.map((index) => prompt.refs[index])));
 }
 
 export const builders = new Map([

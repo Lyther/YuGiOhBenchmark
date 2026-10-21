@@ -53,6 +53,7 @@ import {
 
 import { AnswerError } from "../../src/game/prompts/index.js";
 import { createLogger } from "../../src/log.js";
+import { seatTools } from "../../src/mcp/tools.js";
 import { openConnection } from "../../src/net/connection.js";
 import { PacketFramer } from "../../src/protocol/framing.js";
 import { createSeat, SeatError } from "../../src/seat/controller.js";
@@ -79,7 +80,8 @@ async function setup(t, overrides = {}) {
   const seat = createSeat({
     config, catalog, deck: DECK, record, connect, log,
     replayGraceMs: overrides.replayGraceMs ?? 40, rejoinBaseMs: overrides.rejoinBaseMs ?? 1, random: overrides.random,
-    restoreMs: overrides.restoreMs ?? 15_000, surrenderGraceMs: overrides.surrenderGraceMs,
+    restoreMs: overrides.restoreMs ?? 15_000, surrenderGraceMs: overrides.surrenderGraceMs, keepaliveMs: overrides.keepaliveMs,
+    now: overrides.now,
   });
   // Closing flushes the run folder's queued writes before it is removed.
   t.after(async () => {
@@ -280,7 +282,7 @@ test("rock-paper-scissors, first player, duel prompts, empty-chain auto-pass, ke
   assert.ok(hand instanceof YGOProCtosHandResult);
   assert.equal(hand.res, 3, "Paper");
   link.deliver(stocPacket(YGOProStocHandResult, { res1: 3, res2: 1 }));
-  assert.match(lastEvent(seat).text, /you Paper, opponent Rock/);
+  assert.match(lastEvent(seat).text, /you Paper, opponent Scissors/);
   link.deliver(stocPacket(YGOProStocSelectTp));
   await afterHand;
   assert.equal(seat.snapshot().phase, "first");
@@ -705,6 +707,8 @@ test("a rejoin the server refuses (seated as an observer, or a different deck) i
     assert.equal(link.open, false, "the refused connection is closed");
     await delay(20);
     assert.equal(link.connects.length, 2, "a refusal is final");
+    // The aborted line is a queued write; closing flushes it, as every other reader here does.
+    await seat.close();
     assert.deepEqual((await results(folder)).map((line) => line.type), ["aborted"]);
   }
 });
@@ -731,7 +735,7 @@ test("a rejoin dropped before its restore leaves no deadline to abort the next o
 });
 
 // A new seat process taking over the folder that a stopped seat left mid-match.
-async function restart(t, folder) {
+async function restart(t, folder, { now } = {}) {
   const file = join(folder, "seat.json");
   const state = JSON.parse(await readFile(file, "utf8"));
   // The stopped seat's process is gone: a real pid that has exited.
@@ -740,7 +744,7 @@ async function restart(t, folder) {
   const record = createRecorder({ runDir: dirname(dirname(folder)), room: ROOM, name: NAME });
   const seat = createSeat({
     config: { host: "koishi.example", port: 2339, name: NAME, room: ROOM, version: 0x1362, waitMs: 2000 },
-    catalog, deck: { main: [BLUE_EYES], extra: [], side: [] }, record, connect: link.connect, log, rejoinBaseMs: 1,
+    catalog, deck: { main: [BLUE_EYES], extra: [], side: [] }, record, connect: link.connect, log, rejoinBaseMs: 1, now,
   });
   t.after(() => seat.close());
   return { seat, link, state };
@@ -1057,4 +1061,170 @@ test("a rejoin drops a surrender's held prompt: the restore resends the pending 
   link.deliver(idle(0));
   assert.equal(await surrendered, "prompt");
   assert.notEqual(seat.snapshot().prompt.seq, held.seq, "the server's copy of the prompt");
+});
+
+test("the rock-paper-scissors result names the server's hands and the winner it picks", async (t) => {
+  const { seat, link } = await setup(t);
+  await joinRoom(seat, link);
+  // res1 is this seat's hand; the server lets 2 (Rock) beat 1 (Scissors).
+  link.deliver(stocPacket(YGOProStocHandResult, { res1: 2, res2: 1 }));
+  assert.match(lastEvent(seat).text, /you Rock, opponent Scissors \(you win\)/);
+  link.deliver(stocPacket(YGOProStocHandResult, { res1: 3, res2: 1 }));
+  assert.match(lastEvent(seat).text, /you Paper, opponent Scissors \(opponent wins\)/);
+});
+
+test("a first connect that fails gives the deck prompt back, and the next submit joins", async (t) => {
+  const port = await closedPort();
+  let connects = 0;
+  const { seat, link, folder } = await setup(t, {
+    connect: (options, scripted) => (connects++ === 0 ? openConnection({ ...options, host: "127.0.0.1", port }) : scripted.connect(options)),
+  });
+  assert.equal(await seat.answer({ submit: true }), "prompt");
+  const view = seat.snapshot();
+  assert.equal(view.phase, "deck");
+  assert.match(view.prompt.rejected, /could not reach the server: .*ECONNREFUSED/);
+  assert.equal(view.disconnect, null);
+  await joinRoom(seat, link);
+  assert.equal(seat.snapshot().phase, "rps");
+  await seat.close();
+  assert.ok(!(await readFile(join(folder, "results.jsonl"), "utf8").catch(() => "")).includes("aborted"));
+});
+
+// A runtime can give up on a call (a user interrupt, or a per-call timeout
+// below YGO_WAIT_MS); the MCP SDK then drops whatever the handler returns.
+test("a cancelled call frees the seat at once and leaves its events for the next call", async (t) => {
+  const { seat, link } = await setup(t);
+  const tools = Object.fromEntries(seatTools({ seat, catalog, log }).map((tool) => [tool.name, tool.handler]));
+  await joinRoom(seat, link);
+  const abort = new AbortController();
+  const call = tools.answer({ choose: [1] }, { mcpReq: { signal: abort.signal } });
+  await tick();
+  link.deliver(stocPacket(YGOProStocHandResult, { res1: 2, res2: 1 }));
+  abort.abort();
+  assert.match((await call).content[0].text, /cancelled/i);
+  const { events, delivered } = seat.snapshot();
+  assert.ok(delivered.event < events.length, "the cancelled call delivered nothing");
+  link.deliver(stocPacket(YGOProStocSelectTp));
+  const next = await tools.wait({});
+  assert.equal(next.isError, undefined);
+  assert.match(next.content[0].text, /Rock-paper-scissors: you Rock/);
+});
+
+// srvpro drops a client that has sent nothing for 5 minutes; on 2339 the
+// opponent then wins the match (live in M,TM0,NF#dh7ffdf2a3, 2026-10-21).
+test("a seat that has sent nothing for a while sends a TIME_CONFIRM so srvpro does not drop it", async (t) => {
+  const { seat, link } = await setup(t, { keepaliveMs: 40 });
+  await joinRoom(seat, link);
+  link.take();
+  await delay(130);
+  const sent = link.take();
+  assert.ok(sent.length >= 2, `${sent.length} keepalives in 130 ms`);
+  assert.ok(sent.every((packet) => packet instanceof YGOProCtosTimeConfirm));
+  const answered = seat.answer({ choose: [1] });
+  await tick();
+  assert.ok(link.take().some((packet) => packet instanceof YGOProCtosHandResult), "a real answer still goes out");
+  link.deliver(stocPacket(YGOProStocSelectTp));
+  assert.equal(await answered, "prompt");
+});
+
+test("while a side deck is due, every text result says how long the server still waits", async (t) => {
+  let clock = 1_000_000;
+  const { seat, link } = await setup(t, { now: () => clock });
+  await joinRoom(seat, link);
+  await playDuel(seat, link, { winner: 0 });
+  link.deliver(stocPacket(YGOProStocChangeSide));
+  assert.equal(await seat.wait(), "prompt");
+  assert.match(seat.snapshot().prompt.text, /3 minutes/, "the limit is in the prompt itself");
+  const tools = Object.fromEntries(seatTools({ seat, catalog, log }).map((tool) => [tool.name, tool.handler]));
+  const textOf = async (name, args = {}) => (await tools[name](args)).content.map((block) => block.text).join("\n");
+  clock += 100_000;
+  for (const [name, args] of [["wait", {}], ["deck_show", {}], ["card", { name: "Dark Magician" }], ["card_search", { name: "magician" }]]) {
+    assert.match(await textOf(name, args), /Side time left: about 1 min 20 s/, name);
+  }
+  assert.match(JSON.parse(await textOf("wait", { format: "json" })).next, /Side time left: about 1 min 20 s/);
+  assert.doesNotMatch(await textOf("deck_show", { format: "ydk" }), /Side time/, "an export stays plain data");
+  clock += 50_000;
+  assert.match(await textOf("deck_show"), /almost out: 30 s left\. Submit now with answer \{"submit": true\}/);
+  const refused = seat.answer({ submit: true });
+  await tick();
+  link.deliver(stocPacket(YGOProStocErrorMsg, { msg: ErrorMessageType.SIDEERROR, code: 0 }));
+  assert.equal(await refused, "prompt");
+  assert.match(await textOf("deck_show"), /almost out: 30 s left/, "a refused side deck keeps the server's deadline");
+  clock += 60_000;
+  assert.match(await textOf("wait"), /almost out: 0 s left/);
+  link.take();
+  const submitted = seat.answer({ submit: true });
+  await tick();
+  link.deliver(stocPacket(YGOProStocDuelStart));
+  link.deliver(stocPacket(YGOProStocSelectHand));
+  assert.equal(await submitted, "prompt");
+  assert.equal(seat.sideLeftMs(), null);
+  assert.doesNotMatch(await textOf("deck_show"), /Side time/, "no notice once the side deck is accepted");
+});
+
+test("a call that arrives while the first submit is connecting is refused and leaves the submit alone", async (t) => {
+  let open;
+  const gate = new Promise((resolve) => { open = resolve; });
+  const { seat, link } = await setup(t, { connect: async (options, peer) => { await gate; return peer.connect(options); } });
+  const submit = seat.answer({ submit: true });
+  await tick();
+  const refused = (call) => Promise.race([call.then(() => "accepted", (error) => error.message), delay(50).then(() => "accepted")]);
+  assert.match(await refused(seat.wait()), /let it return first/);
+  assert.match(await refused(seat.answer({ submit: true })), /let it return first/);
+  open();
+  await tick();
+  link.deliver(stocPacket(YGOProStocJoinGame, { info: HOST_INFO }));
+  link.deliver(stocPacket(YGOProStocTypeChange, { type: 0x10 | 0 }));
+  link.deliver(stocPacket(YGOProStocHsPlayerEnter, { name: "gpt-seat", pos: 1 }));
+  link.deliver(stocPacket(YGOProStocHsPlayerChange, status(0, PlayerChangeState.READY)));
+  link.deliver(stocPacket(YGOProStocHsPlayerChange, status(1, PlayerChangeState.READY)));
+  link.deliver(stocPacket(YGOProStocDuelStart));
+  link.deliver(stocPacket(YGOProStocSelectHand));
+  assert.equal(await submit, "prompt", "the submit that was already under way still returns its view");
+});
+
+test("the deck prompt states the server's deck rules", async (t) => {
+  const { seat } = await setup(t);
+  assert.equal(await seat.wait(), "prompt");
+  const { text } = seat.snapshot().prompt;
+  assert.match(text, /^Your deck: Main 3, Extra 1, Side 1\./);
+  assert.match(text, /Main 40 to 60 cards, Extra up to 15, Side up to 15, at most 3 copies of a card/);
+});
+
+// srvpro keeps the timer the first CHANGE_SIDE started through a rejoin; on
+// 2339 a seat that rejoined 62 s into siding was removed at 180 s (sw26294299).
+test("a rejoin while siding keeps the server's side deadline", async (t) => {
+  let clock = 1_000_000;
+  const { seat, link } = await setup(t, { now: () => clock });
+  await joinRoom(seat, link);
+  await playDuel(seat, link, { winner: 0 });
+  link.deliver(stocPacket(YGOProStocChangeSide));
+  assert.equal(await seat.wait(), "prompt");
+  clock += 60_000;
+  link.serverClose();
+  await delay(20);
+  rejoined(link);
+  link.deliver(stocPacket(YGOProStocChangeSide));
+  assert.equal(await seat.wait(), "prompt");
+  assert.equal(seat.snapshot().prompt.kind, "side");
+  assert.equal(seat.sideLeftMs(), 120_000);
+});
+
+test("a seat restarted while siding keeps the server's side deadline", async (t) => {
+  let clock = 1_000_000;
+  const first = await setup(t, { now: () => clock });
+  await joinRoom(first.seat, first.link);
+  await playDuel(first.seat, first.link, { winner: 1 });
+  first.link.deliver(stocPacket(YGOProStocChangeSide));
+  assert.equal(await first.seat.wait(), "prompt");
+  await first.seat.close("stdin closed");
+  clock += 60_000;
+  const { seat, link } = await restart(t, first.folder, { now: () => clock });
+  const resumed = seat.answer({ submit: true });
+  await tick();
+  rejoined(link);
+  link.deliver(stocPacket(YGOProStocChangeSide));
+  assert.equal(await resumed, "prompt");
+  assert.equal(seat.snapshot().prompt.kind, "side");
+  assert.equal(seat.sideLeftMs(), 120_000);
 });

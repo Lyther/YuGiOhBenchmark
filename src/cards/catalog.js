@@ -9,12 +9,20 @@ import { OcgcoreCommonConstants as C } from "ygopro-msg-encode";
 import { mergeStrings, parseStringsConf } from "./strings-conf.js";
 
 // Lowest priority first: a later layer replaces an earlier one code by code.
+// That order decides a card's text (name, effect text, strings).
 const LAYERS = Object.freeze([
   { source: "zh-CN", cdbs: ["cards.cdb"], strings: "strings.conf" },
   { source: "super-pre", cdbs: ["test-release.cdb", "test-update.cdb"], strings: "test-strings.conf" },
   { source: "super-pre-en", cdbs: ["test-release.cdb"], strings: "test-strings.conf" },
   { source: "en-US", cdbs: ["cards.cdb"], strings: "strings.conf", required: true },
 ]);
+
+// A card's data (type, stats, archetype codes) instead follows the server's
+// load order, a fixed source order and never file dates: the server loads its
+// pre-release files over its base data, so the last source in this order that
+// has the code decides it, whatever language that file's text is in.
+const DATA_ORDER = Object.freeze(["zh-CN", "en-US", "super-pre-en", "super-pre"]);
+const DATA_FIELDS = Object.freeze(["alias", "type", "level", "attribute", "race", "attack", "defense", "lscale", "rscale", "linkMarker", "setcode"]);
 
 // YGOPro DataManager: descriptions up to 0x7ff are system strings, and the
 // attribute and race names are system strings 1010+bit and 1020+bit.
@@ -167,6 +175,19 @@ function toCard(entry, source, strings) {
   };
 }
 
+function serverData(layers) {
+  const newest = new Map();
+  for (const source of DATA_ORDER) {
+    for (const entry of layers.find((layer) => layer.source === source)?.entries ?? []) newest.set(entry.code, entry);
+  }
+  return newest;
+}
+
+function withData(entry, data) {
+  if (!data || data === entry) return entry;
+  return { ...entry, ...Object.fromEntries(DATA_FIELDS.map((field) => [field, data[field]])) };
+}
+
 function isSetCard(setcodes, value) {
   return setcodes.some((code) => (code & SETCODE_BASE) === (value & SETCODE_BASE) && (code & value) === value);
 }
@@ -182,11 +203,13 @@ class Catalog {
     for (const layer of layers) {
       for (const entry of layer.entries) chosen.set(entry.code, { entry, source: layer.source });
     }
+    const newest = serverData(layers);
     this.cards = new Map();
     this.meta = new Map();
     for (const [code, { entry, source }] of chosen) {
-      this.cards.set(code, toCard(entry, source, this.strings));
-      this.meta.set(code, { type: entry.type, setcodes: entry.setcode });
+      const merged = withData(entry, newest.get(code));
+      this.cards.set(code, toCard(merged, source, this.strings));
+      this.meta.set(code, { type: merged.type, setcodes: merged.setcode });
     }
     for (const entry of packEntries) this.#applyPack(entry);
     this.sorted = [...this.cards.values()].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || a.code - b.code);

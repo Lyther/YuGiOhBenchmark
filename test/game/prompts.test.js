@@ -373,11 +373,62 @@ test("lobby prompts resolve to deck, hand and first-player actions", () => {
   const side = lobbyPrompt("side", { text: "Side" });
   assert.deepEqual(resolveAnswer(side, { submit: true }), { type: "deck" });
   const rps = lobbyPrompt("rps");
-  assert.deepEqual(resolveAnswer(rps, { choose: [1] }), { type: "hand", value: 1 });
-  assert.deepEqual(resolveAnswer(rps, { choose: [3] }), { type: "hand", value: 2 });
+  assert.deepEqual(resolveAnswer(rps, { choose: [1] }), { type: "hand", value: 2 });
+  assert.deepEqual(resolveAnswer(rps, { choose: [3] }), { type: "hand", value: 1 });
   const first = lobbyPrompt("first");
   assert.deepEqual(first.options.map((option) => option.label), ["Go first", "Go second"]);
   assert.deepEqual(resolveAnswer(first, { choose: [2] }), { type: "tp", goFirst: false });
+});
+
+// The stock client shows a Special Summon from the left Pendulum Zone as the
+// Pendulum Summon, and a face-down repositionable monster as a Flip Summon.
+test("main-phase commands name a Pendulum Summon and a Flip Summon", () => {
+  let local = duelBoard();
+  const put = (code, location, sequence, position) => {
+    local = applyBoard(local, gameMessage(YGOProMsgMove, {
+      code, previous: { controller: 0, location: HAND, sequence: 0, position: 0 },
+      current: { controller: 0, location, sequence, position }, reason: 0,
+    }));
+  };
+  put(STRATOS, MZONE, 1, C.POS_FACEDOWN_DEFENSE);
+  put(ODD_EYES, C.LOCATION_SZONE, 0, C.POS_FACEUP_ATTACK);
+  const built = buildPrompt(gameMessage(YGOProMsgSelectIdleCmd, {
+    player: 0, summonableCount: 0, summonableCards: [],
+    spSummonableCount: 1, spSummonableCards: [{ code: ODD_EYES, ...where(0, C.LOCATION_SZONE, 0) }],
+    reposableCount: 2, reposableCards: [{ code: STRATOS, ...where(0, MZONE, 1) }, { code: BLUE_EYES, ...where(0, MZONE, 2) }],
+    msetableCount: 0, msetableCards: [], ssetableCount: 0, ssetableCards: [], activatableCount: 0, activatableCards: [],
+    canBp: 0, canEp: 1, canShuffle: 0,
+  }), { board: local, catalog, hint: null });
+  assert.deepEqual(labels(built).slice(0, 3), [
+    "Pendulum Summon with the scale Odd-Eyes Pendulum Dragon (your S1)",
+    "Flip Summon Elemental HERO Stratos (your M2)",
+    "Change position of Blue-Eyes White Dragon (your M3)",
+  ]);
+});
+
+// ocgcore's sort_card lists the current top card first, and the card given
+// new position 0 goes on top (processor.cpp PROCESSOR_SORT_DECK).
+test("a sort says which end of the Deck is the top", () => {
+  const sort = prompt(YGOProMsgSortCard, {
+    player: 0, count: 2, cards: [{ code: ASH, ...where(0, C.LOCATION_DECK, 0) }, { code: MAXX, ...where(0, C.LOCATION_DECK, 1) }],
+  });
+  assert.match(sort.prompt.text, /option 1 is the current top card.*the first you list goes on top/i);
+});
+
+test("a place answer names exactly the zones asked for", () => {
+  const open = (sequences) => (~sequences.reduce((mask, sequence) => mask | (1 << sequence), 0)) >>> 0;
+  const place = prompt(YGOProMsgSelectPlace, { player: 0, count: 1, flag: open([0, 2]) });
+  assert.throws(() => resolveAnswer(place.prompt, { choose: [1, 2] }), /exactly 1/);
+});
+
+// ygopro's server lets 2 beat 1, 3 beat 2 and 1 beat 3 (single_duel.cpp), and
+// the stock client draws 1, 2, 3 as Scissors, Rock, Paper (textures/f1-f3).
+test("rock-paper-scissors options send the server's hand values: 1 Scissors, 2 Rock, 3 Paper", () => {
+  const lobby = lobbyPrompt("rps");
+  assert.deepEqual(lobby.options.map((option) => option.label), ["Rock", "Paper", "Scissors"]);
+  assert.deepEqual([1, 2, 3].map((n) => resolveAnswer(lobby, { choose: [n] }).value), [2, 3, 1]);
+  const duel = prompt(YGOProMsgRockPaperScissors, { player: 0 });
+  assert.deepEqual([1, 2, 3].map((n) => bytes(duel, { choose: [n] })[0]), [2, 3, 1]);
 });
 
 test("answers must fit the prompt: right field, option numbers in range, no repeats", () => {

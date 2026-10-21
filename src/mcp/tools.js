@@ -4,7 +4,7 @@ import { TYPE_VOCABULARY } from "../cards/catalog.js";
 import { applyEdits, DeckEditError, exportDeck } from "../deck/deck.js";
 import { AnswerError } from "../game/prompts/index.js";
 import { SeatError } from "../seat/controller.js";
-import { deckView, seatView } from "../seat/view.js";
+import { deckView, seatView, sideNotice } from "../seat/view.js";
 import { renderCard, renderDeck, renderSearch, renderSeat } from "./render.js";
 
 // Claude Code keeps results up to this size inline instead of saving them to
@@ -24,22 +24,25 @@ function failure(message) {
   return { isError: true, content: [{ type: "text", text: message }] };
 }
 
+// The SDK drops a cancelled call's result, so it must not mark a view delivered.
+const CANCELLED = text("Cancelled; nothing was delivered. Call wait to see the current state.");
+
 function viewResult(seat, { full = false, format: shape = "text" } = {}) {
-  const { dto, cursor } = seatView(seat.snapshot(), { catalog: seat.catalog, full });
+  const { dto, cursor } = seatView(seat.snapshot(), { catalog: seat.catalog, full, sideLeftMs: seat.sideLeftMs() });
   seat.markDelivered(cursor);
   return text(shape === "json" ? JSON.stringify(dto) : renderSeat(dto));
 }
 
 function nextHint(seat) {
-  return seatView(seat.snapshot(), { catalog: seat.catalog }).dto.next;
+  return seatView(seat.snapshot(), { catalog: seat.catalog, sideLeftMs: seat.sideLeftMs() }).dto.next;
 }
 
 // Seat-state and answer problems become isError results with the next step;
 // anything else is logged and reported as an internal error.
 function guarded(seat, log, handler) {
-  return async (args) => {
+  return async (args, ctx) => {
     try {
-      return await handler(args ?? {});
+      return await handler(args ?? {}, ctx?.mcpReq?.signal);
     } catch (error) {
       if (error instanceof SeatError || error instanceof AnswerError || error instanceof DeckEditError) {
         return failure(`${error.message}. Next: ${nextHint(seat)}`);
@@ -126,16 +129,17 @@ function playTools(seat) {
       description: "Wait for your next decision. Returns the seat view: phase, board, new events (chat included) and the open prompt. "
         + "Returns at once when a prompt is open; otherwise blocks until something happens or the wait budget ends, then call it again.",
       inputSchema: z.object({ full: z.boolean().optional().describe("include the board even if unchanged"), format }),
-    }, async (args) => {
-      await seat.wait();
+    }, async (args, signal) => {
+      if (await seat.wait({ signal }) === "cancelled") return CANCELLED;
       return viewResult(seat, args);
     }],
     ["answer", {
       description: "Answer the open prompt with exactly one field, as its answerHelp says: choose (option numbers), counts (counters per option), "
         + "card (a card name or code to declare), submit (deck or side deck), cancel, or finish. Then waits like wait and returns the next view.",
       inputSchema: answerSchema,
-    }, async (args) => {
-      await seat.answer(Object.fromEntries(ANSWER_FIELDS.filter((field) => args[field] !== undefined).map((field) => [field, args[field]])));
+    }, async (args, signal) => {
+      const fields = Object.fromEntries(ANSWER_FIELDS.filter((field) => args[field] !== undefined).map((field) => [field, args[field]]));
+      if (await seat.answer(fields, { signal }) === "cancelled") return CANCELLED;
       return viewResult(seat, args);
     }],
   ];
@@ -193,15 +197,32 @@ function roomTools(seat) {
       description: "Surrender the current duel. Then waits like wait and returns the next view. If the server refuses the surrender, "
         + "the pending prompt comes back after about 10 s.",
       inputSchema: z.object({ format }),
-    }, async (args) => {
-      await seat.surrender();
+    }, async (args, signal) => {
+      if (await seat.surrender({ signal }) === "cancelled") return CANCELLED;
       return viewResult(seat, args);
     }],
   ];
 }
 
+// The views of wait, answer and surrender end in a Next line that carries the
+// side notice. The other tools do not, and a siding model spends its time on
+// them, so their text results get the notice as a last line. Exports and JSON
+// stay plain data.
+const NEXT_TOOLS = new Set(["wait", "answer", "surrender"]);
+
+function sideReminded(seat, handler) {
+  return async (args, signal) => {
+    const result = await handler(args, signal);
+    const left = seat.sideLeftMs();
+    if (left === null || (args.format !== undefined && args.format !== "text")) return result;
+    return text(`${result.content.map((block) => block.text).join("\n")}\n${sideNotice(left)}`);
+  };
+}
+
 // The tool list, in contract order. A tool is listed only once it works.
 export function seatTools({ seat, catalog, log }) {
   const definitions = [...playTools(seat), ...deckTools(seat, catalog), ...cardTools(catalog), ...roomTools(seat)];
-  return definitions.map(([name, config, handler]) => ({ name, config: { ...config, _meta: META }, handler: guarded(seat, log, handler) }));
+  return definitions.map(([name, config, handler]) => ({
+    name, config: { ...config, _meta: META }, handler: guarded(seat, log, NEXT_TOOLS.has(name) ? handler : sideReminded(seat, handler)),
+  }));
 }

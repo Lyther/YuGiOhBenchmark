@@ -92,7 +92,9 @@ function encodeSum(prompt, answer) {
 
 function sort(message, context) {
   const options = message.cards.map((card, index) => cardOption(index + 1, context, card));
-  const prompt = { kind: "sort", text: hintText(context, "Choose the order of these cards."), options, source: message };
+  // ocgcore lists the current top card first and puts new position 0 on top.
+  const order = "Option 1 is the current top card. List every option once: the first you list goes on top of the Deck; cancel keeps this order.";
+  const prompt = { kind: "sort", text: `${hintText(context, "Choose the order of these cards.")} ${order}`, options, source: message };
   return { prompt, auto: options.length === 1 ? { choose: [1] } : null };
 }
 

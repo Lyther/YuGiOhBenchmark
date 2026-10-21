@@ -10,9 +10,9 @@ function resultSize(result) {
 // Each call logs its name, duration and result size, so a result a runtime cut
 // can be compared with what the seat sent.
 function logged({ name, handler }, log) {
-  return async (args) => {
+  return async (args, ctx) => {
     const started = performance.now();
-    const result = await handler(args);
+    const result = await handler(args, ctx);
     log.info({ tool: name, ms: Math.round(performance.now() - started), chars: resultSize(result), isError: Boolean(result.isError) }, "tool call");
     return result;
   };

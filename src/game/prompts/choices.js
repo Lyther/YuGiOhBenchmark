@@ -1,5 +1,4 @@
 import {
-  HandResult,
   IndexResponse,
   YGOProMsgAnnounceAttrib,
   YGOProMsgAnnounceCard,
@@ -20,9 +19,9 @@ import { AnswerError, answerField, bitsOf, cardOption, chooseMany, chooseOne, hi
 
 const ACTIVATE_FROM = 200;
 const TRIGGER_ON = 221;
-export const RPS_CHOICES = Object.freeze([
-  ["Rock", HandResult.ROCK], ["Paper", HandResult.PAPER], ["Scissors", HandResult.SCISSORS],
-]);
+// The server's hand values, as the stock client draws them (textures/f1-f3):
+// 1 Scissors, 2 Rock, 3 Paper. The codec's HandResult names 1 and 2 the other way.
+export const RPS_CHOICES = Object.freeze([["Rock", 2], ["Paper", 3], ["Scissors", 1]]);
 
 function chainText(context) {
   const chain = context.board?.chain ?? [];

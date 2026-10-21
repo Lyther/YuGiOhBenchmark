@@ -1,4 +1,4 @@
-# ygopro-msg-encode 1.3.0: three response defects and a shuffle decoder defect
+# ygopro-msg-encode 1.3.0: three response defects, a shuffle decoder defect and swapped hand names
 
 Status: prepared, not filed. Filing upstream needs the project owner's go-ahead (roadmap P3.2).
 
@@ -26,3 +26,7 @@ For the new order "third card, first card, second card" (`IndexResponse(2), Inde
 The engine writes `location`, `count`, all `count` old locations, then all `count` new locations. Each location occupies four bytes. A zero new location hides that card's destination; a nonzero location preserves the movement of visible Xyz materials ([engine writer](https://github.com/Fluorohydride/ygopro-core/blob/e5ce3178a7d78d3d31de0ef40993cb83b34772ce/libduel.cpp#L1612-L1635)). The codec instead declares an array of interleaved `{oldLocation, newLocation}` pairs ([codec declaration](https://github.com/purerosefallen/ygopro-msg-encode/blob/9a53630de5a31f29229866c19697684b9baa4267/src/protos/msg/proto/shuffle-set-card.ts#L20-L38)).
 
 For two cards, the second old location becomes the first new location, and the first new location becomes the second old location. The regression uses independent wire bytes, so the codec's encoder cannot hide its decoder error. The seat repairs this one message at the packet boundary and preserves the original bytes for capture.
+
+## 5. `HandResult` names Rock and Scissors the other way round
+
+`HandResult` defines `ROCK = 1`, `SCISSORS = 2` and `PAPER = 3`. The server lets 2 beat 1, 3 beat 2 and 1 beat 3 ([single_duel](https://github.com/Fluorohydride/ygopro/blob/bfa360f631010f9eb9d74d1054e2732388de7860/gframe/single_duel.cpp#L384-L387)), and the stock client draws hand *i* from `textures/f<i>.jpg`, which show scissors, rock and paper ([image_manager](https://github.com/Fluorohydride/ygopro/blob/bfa360f631010f9eb9d74d1054e2732388de7860/gframe/image_manager.cpp#L35-L37)). So 1 is Scissors and 2 is Rock. A client that sends `HandResult.ROCK` plays Scissors, and one that names the winner by these names names the loser. Expected: `SCISSORS = 1`, `ROCK = 2`, `PAPER = 3`. On 2339, in room `M,TM0,NF#dh7ffdf2a3`, the seat that sent `HandResult.ROCK` against `HandResult.PAPER` got the first-player choice. The seat sends the server's values itself.

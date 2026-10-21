@@ -5,6 +5,9 @@ const FORMATS = "YDK text, a ydke:// URL or a KoishiPro deck code";
 // A KoishiPro deck code is unpadded or padded base64url.
 const DECK_CODE = /^[A-Za-z0-9_-]+={0,2}$/;
 const YDK_MARKER = /^\s*(?:#main|#extra|!side)\s*$/m;
+// ygopro reads the leading digits of a YDK card line, so "14558127 # Ash
+// Blossom" is a card there; the decoder would skip the whole line.
+const CARD_LINE_TEXT = /^(\d+)[ \t]+\S.*$/gm;
 
 export function emptyDeck() {
   return { main: [], extra: [], side: [] };
@@ -29,8 +32,12 @@ export function parseDeck(text) {
       throw new Error(`invalid ydke:// URL: ${error.message}`);
     }
   }
-  if (YDK_MARKER.test(source)) return plain(YGOProDeck.fromYdkString(source));
+  if (YDK_MARKER.test(source)) return plain(YGOProDeck.fromYdkString(source.replace(CARD_LINE_TEXT, "$1")));
   if (!DECK_CODE.test(source)) throw new Error(`deck import expects ${FORMATS}`);
+  // Every card entry is 4 bytes; the decoder skips a partial one, so a word or
+  // a cut-off code would otherwise import as a different deck.
+  const bytes = Buffer.from(source.replace(/=+$/, ""), "base64url").length;
+  if (bytes === 0 || bytes % 4 !== 0) throw new Error(`invalid deck code: ${bytes} bytes is not a whole number of 4-byte card entries`);
   let decoded;
   try {
     decoded = YGOProDeck.fromEncodedString(source);
@@ -44,8 +51,18 @@ export function exportDeck(deck, format) {
   const encoded = new YGOProDeck(plain(deck));
   if (format === "ydk") return encoded.toYdkString();
   if (format === "ydke") return encoded.toYdkeURL();
-  if (format === "code") return encoded.toEncodedString();
+  if (format === "code") return deckCode(encoded);
   throw new Error(`unknown deck format ${format}; use ydk, ydke or code`);
+}
+
+// The working deck takes up to 60 copies of a card (the server refuses more than 3),
+// and a deck code holds at most 4, so an export can fail; say why.
+function deckCode(encoded) {
+  try {
+    return encoded.toEncodedString();
+  } catch (error) {
+    throw new DeckEditError(`a deck code cannot hold this deck (${error.message}); export it as ydk or ydke`);
+  }
 }
 
 export function sectionFor(code, catalog) {

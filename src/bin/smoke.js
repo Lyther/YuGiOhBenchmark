@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import { Client } from "@modelcontextprotocol/client";
@@ -16,8 +17,8 @@ const CALL_TIMEOUT_MS = 90_000;
 const SEAT_WAIT_MS = "20000";
 const DEADLINE_MS = 10 * 60_000;
 const LOBBY_PROMPTS = new Set(["deck", "side", "rps", "first"]);
-// Different hands, so rock-paper-scissors never ties.
-const HANDS = Object.freeze({ a: 1, b: 3 });
+// Scissors for a and Rock for b: b wins rock-paper-scissors and goes first.
+const HANDS = Object.freeze({ a: 3, b: 1 });
 
 function say(line) {
   process.stdout.write(`${line}\n`);
@@ -146,6 +147,7 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// argv[1] keeps any symlink in the launch path; import.meta.url is the real path.
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await main();
 }

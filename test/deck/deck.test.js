@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { exportDeck, parseDeck } from "../../src/deck/deck.js";
+import { DeckEditError, exportDeck, parseDeck } from "../../src/deck/deck.js";
 import { fixtureCatalog } from "../helpers/fixture-catalog.js";
 
 const catalog = await fixtureCatalog();
@@ -42,6 +42,12 @@ test("unrecognized or malformed imports are refused with the accepted formats", 
   assert.throws(() => parseDeck("#main\n268435456\n"), /code 268435456/);
 });
 
+test("a deck code must decode to whole card entries: a word or a cut-off code is refused", () => {
+  assert.throws(() => parseDeck("HERO"), /deck code/);
+  assert.throws(() => parseDeck("AshBlossom"), /deck code/);
+  assert.throws(() => parseDeck(exportDeck(DECK, "code").slice(0, -2)), /deck code/);
+});
+
 test("an edit that cannot apply rejects the whole call with the reason", async () => {
   const { applyEdits, DeckEditError } = await import("../../src/deck/deck.js");
   const start = { main: [89631139], extra: [], side: [] };
@@ -50,4 +56,15 @@ test("an edit that cannot apply rejects the whole call with the reason", async (
   assert.throws(() => applyEdits(start, { move: [{ card: 46986414, from: "main", to: "side" }] }, catalog), /Dark Magician/);
   assert.throws(() => applyEdits(start, { add: [{ card: 0 }] }, catalog), /code/);
   assert.throws(() => applyEdits(start, {}, catalog), /nothing to do/);
+});
+
+test("a deck code that cannot hold the deck says so, and ydk and ydke still can", () => {
+  const heavy = { main: Array(5).fill(89631139), extra: [], side: [] };
+  assert.throws(() => exportDeck(heavy, "code"), (error) => error instanceof DeckEditError && /deck code cannot hold this deck.*ydk or ydke/.test(error.message));
+  for (const format of ["ydk", "ydke"]) assert.equal(parseDeck(exportDeck(heavy, format)).main.length, 5, format);
+});
+
+test("a YDK card line with text after the code is still that card, as in ygopro", () => {
+  const deck = parseDeck("#main\n14558127 # Ash Blossom\n89631139\t// Blue-Eyes\r\n#extra\n44508094 Stardust Dragon\n!side\n23434538 # Maxx C\r\n");
+  assert.deepEqual(deck, { main: [14558127, 89631139], extra: [44508094], side: [23434538] });
 });

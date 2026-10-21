@@ -53,6 +53,7 @@ import {
 
 import { AnswerError } from "../../src/game/prompts/index.js";
 import { createLogger } from "../../src/log.js";
+import { seatTools } from "../../src/mcp/tools.js";
 import { openConnection } from "../../src/net/connection.js";
 import { PacketFramer } from "../../src/protocol/framing.js";
 import { createSeat, SeatError } from "../../src/seat/controller.js";
@@ -1084,4 +1085,24 @@ test("a first connect that fails gives the deck prompt back, and the next submit
   assert.equal(seat.snapshot().phase, "rps");
   await seat.close();
   assert.ok(!(await readFile(join(folder, "results.jsonl"), "utf8").catch(() => "")).includes("aborted"));
+});
+
+// A runtime can give up on a call (a user interrupt, or a per-call timeout
+// below YGO_WAIT_MS); the MCP SDK then drops whatever the handler returns.
+test("a cancelled call frees the seat at once and leaves its events for the next call", async (t) => {
+  const { seat, link } = await setup(t);
+  const tools = Object.fromEntries(seatTools({ seat, catalog, log }).map((tool) => [tool.name, tool.handler]));
+  await joinRoom(seat, link);
+  const abort = new AbortController();
+  const call = tools.answer({ choose: [1] }, { mcpReq: { signal: abort.signal } });
+  await tick();
+  link.deliver(stocPacket(YGOProStocHandResult, { res1: 2, res2: 1 }));
+  abort.abort();
+  assert.match((await call).content[0].text, /cancelled/i);
+  const { events, delivered } = seat.snapshot();
+  assert.ok(delivered.event < events.length, "the cancelled call delivered nothing");
+  link.deliver(stocPacket(YGOProStocSelectTp));
+  const next = await tools.wait({});
+  assert.equal(next.isError, undefined);
+  assert.match(next.content[0].text, /Rock-paper-scissors: you Rock/);
 });

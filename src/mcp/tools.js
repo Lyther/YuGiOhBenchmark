@@ -24,6 +24,9 @@ function failure(message) {
   return { isError: true, content: [{ type: "text", text: message }] };
 }
 
+// The SDK drops a cancelled call's result, so it must not mark a view delivered.
+const CANCELLED = text("Cancelled; nothing was delivered. Call wait to see the current state.");
+
 function viewResult(seat, { full = false, format: shape = "text" } = {}) {
   const { dto, cursor } = seatView(seat.snapshot(), { catalog: seat.catalog, full });
   seat.markDelivered(cursor);
@@ -37,9 +40,9 @@ function nextHint(seat) {
 // Seat-state and answer problems become isError results with the next step;
 // anything else is logged and reported as an internal error.
 function guarded(seat, log, handler) {
-  return async (args) => {
+  return async (args, ctx) => {
     try {
-      return await handler(args ?? {});
+      return await handler(args ?? {}, ctx?.mcpReq?.signal);
     } catch (error) {
       if (error instanceof SeatError || error instanceof AnswerError || error instanceof DeckEditError) {
         return failure(`${error.message}. Next: ${nextHint(seat)}`);
@@ -126,16 +129,17 @@ function playTools(seat) {
       description: "Wait for your next decision. Returns the seat view: phase, board, new events (chat included) and the open prompt. "
         + "Returns at once when a prompt is open; otherwise blocks until something happens or the wait budget ends, then call it again.",
       inputSchema: z.object({ full: z.boolean().optional().describe("include the board even if unchanged"), format }),
-    }, async (args) => {
-      await seat.wait();
+    }, async (args, signal) => {
+      if (await seat.wait({ signal }) === "cancelled") return CANCELLED;
       return viewResult(seat, args);
     }],
     ["answer", {
       description: "Answer the open prompt with exactly one field, as its answerHelp says: choose (option numbers), counts (counters per option), "
         + "card (a card name or code to declare), submit (deck or side deck), cancel, or finish. Then waits like wait and returns the next view.",
       inputSchema: answerSchema,
-    }, async (args) => {
-      await seat.answer(Object.fromEntries(ANSWER_FIELDS.filter((field) => args[field] !== undefined).map((field) => [field, args[field]])));
+    }, async (args, signal) => {
+      const fields = Object.fromEntries(ANSWER_FIELDS.filter((field) => args[field] !== undefined).map((field) => [field, args[field]]));
+      if (await seat.answer(fields, { signal }) === "cancelled") return CANCELLED;
       return viewResult(seat, args);
     }],
   ];
@@ -193,8 +197,8 @@ function roomTools(seat) {
       description: "Surrender the current duel. Then waits like wait and returns the next view. If the server refuses the surrender, "
         + "the pending prompt comes back after about 10 s.",
       inputSchema: z.object({ format }),
-    }, async (args) => {
-      await seat.surrender();
+    }, async (args, signal) => {
+      if (await seat.surrender({ signal }) === "cancelled") return CANCELLED;
       return viewResult(seat, args);
     }],
   ];

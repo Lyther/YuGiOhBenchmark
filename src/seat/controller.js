@@ -237,14 +237,20 @@ class Seat {
     delivered.boardVersion = Math.max(delivered.boardVersion, boardVersion);
   }
 
-  async wait() {
+  // A runtime that gives up on a call aborts its signal: the seat is free at
+  // once, and nothing the call would have shown counts as delivered.
+  async wait({ signal } = {}) {
     if (this.#waiter) return Promise.reject(new SeatError("a call is already waiting; let it return first"));
+    if (signal?.aborted) return "cancelled";
     const ready = this.#readyReason();
     const reason = ready ?? await new Promise((resolve) => {
       const timer = setTimeout(() => this.#wake("timeout"), this.#config.waitMs);
       timer.unref?.();
-      this.#waiter = { resolve, timer };
+      const onAbort = () => this.#wake("cancelled");
+      signal?.addEventListener("abort", onAbort, { once: true });
+      this.#waiter = { resolve, timer, signal, onAbort };
     });
+    if (reason === "cancelled") return reason;
     // A chat or prompt can wake this call earlier in the same packet batch
     // that ends the match. Check the final state before returning any view.
     if (this.#state.phase === "ended") {
@@ -254,7 +260,7 @@ class Seat {
     return reason;
   }
 
-  async answer(answer) {
+  async answer(answer, { signal } = {}) {
     this.#requireIdle();
     this.#requireLive();
     const prompt = this.#state.prompt;
@@ -268,7 +274,7 @@ class Seat {
       if (!this.#state.prompt && this.#state.phase !== "disconnected") this.#state.prompt = prompt;
       throw error;
     }
-    return this.wait();
+    return this.wait({ signal });
   }
 
   chat(text) {
@@ -279,13 +285,13 @@ class Seat {
     return { sent: text };
   }
 
-  surrender() {
+  surrender({ signal } = {}) {
     this.#requireIdle();
     this.#requireLive();
     if (this.#state.phase !== "duel") throw new SeatError(`surrender works only during a duel (phase ${this.#state.phase})`);
     this.#send(encodeSurrender());
     this.#holdPrompt();
-    return this.wait();
+    return this.wait({ signal });
   }
 
   // The pending prompt is put away until the duel ends, and given back if it
@@ -359,6 +365,7 @@ class Seat {
     if (!waiter) return;
     this.#waiter = null;
     clearTimeout(waiter.timer);
+    waiter.signal?.removeEventListener("abort", waiter.onAbort);
     waiter.resolve(reason);
   }
 

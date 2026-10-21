@@ -1145,6 +1145,11 @@ test("while a side deck is due, every text result says how long the server still
   assert.doesNotMatch(await textOf("deck_show", { format: "ydk" }), /Side time/, "an export stays plain data");
   clock += 50_000;
   assert.match(await textOf("deck_show"), /almost out: 30 s left\. Submit now with answer \{"submit": true\}/);
+  const refused = seat.answer({ submit: true });
+  await tick();
+  link.deliver(stocPacket(YGOProStocErrorMsg, { msg: ErrorMessageType.SIDEERROR, code: 0 }));
+  assert.equal(await refused, "prompt");
+  assert.match(await textOf("deck_show"), /almost out: 30 s left/, "a refused side deck keeps the server's deadline");
   clock += 60_000;
   assert.match(await textOf("wait"), /almost out: 0 s left/);
   link.take();

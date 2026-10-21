@@ -59,6 +59,11 @@ const RESTORE_MS = 15_000;
 // (srvpro ctos_follow 'SURRENDER') is never passed on, and the duel still
 // waits on the pending prompt.
 const SURRENDER_GRACE_MS = 10_000;
+// srvpro drops a client that has sent nothing for 5 minutes (client.setTimeout
+// 300000), and on 2339 the opponent then wins the match. A seat sends nothing
+// while either model thinks, so after a minute of silence it sends a
+// TIME_CONFIRM, which a room with no clock ignores.
+const KEEPALIVE_MS = 60_000;
 const OBSERVER = 7;
 const LOST_CONNECTION = 0x4;
 // Control characters and Unicode line and paragraph separators.
@@ -157,7 +162,8 @@ class Seat {
     [YGOProMsgRetry, (seat) => seat.#onRetry()],
   ]);
 
-  #config; #catalog; #record; #connect; #log; #graceMs; #random; #rejoinBaseMs; #restoreMs; #surrenderGraceMs;
+  #config; #catalog; #record; #connect; #log; #graceMs; #random; #rejoinBaseMs; #restoreMs; #surrenderGraceMs; #keepaliveMs;
+  #keepaliveTimer = null;
   #connection = null;
   #generation = 0;
   #version;
@@ -197,7 +203,7 @@ class Seat {
 
   constructor({
     config, catalog, deck, record, connect, log, replayGraceMs = REPLAY_GRACE_MS, rejoinBaseMs = REJOIN_BASE_MS, random = Math.random,
-    restoreMs = RESTORE_MS, surrenderGraceMs = SURRENDER_GRACE_MS,
+    restoreMs = RESTORE_MS, surrenderGraceMs = SURRENDER_GRACE_MS, keepaliveMs = KEEPALIVE_MS,
   }) {
     this.#config = config;
     this.#catalog = catalog;
@@ -208,6 +214,7 @@ class Seat {
     this.#rejoinBaseMs = rejoinBaseMs;
     this.#restoreMs = restoreMs;
     this.#surrenderGraceMs = surrenderGraceMs;
+    this.#keepaliveMs = keepaliveMs;
     this.#random = random;
     this.#state = {
       phase: "deck", room: config.room, name: config.name, host: false, opponent: null, opponentReady: false,
@@ -333,6 +340,7 @@ class Seat {
     clearTimeout(this.#rejoinTimer);
     clearTimeout(this.#restoreTimer);
     clearTimeout(this.#held?.timer);
+    clearTimeout(this.#keepaliveTimer);
     const { phase, match } = this.#state;
     const resumable = this.#started && phase !== "ended" && phase !== "disconnected";
     if (resumable) this.#writeResult({ type: "interrupted", phase, duel: match.duel, turn: this.#state.board?.turn ?? 0, reason: why });
@@ -407,6 +415,15 @@ class Seat {
   #send(bytes) {
     if (!this.#connection || this.#connection.closed) throw new SeatError(this.#rejoin ? REJOINING : "not connected");
     this.#connection.send(bytes);
+    // srvpro times out silence, so every packet sent starts the count again.
+    clearTimeout(this.#keepaliveTimer);
+    this.#keepaliveTimer = setTimeout(() => this.#keepalive(), this.#keepaliveMs);
+    this.#keepaliveTimer.unref?.();
+  }
+
+  #keepalive() {
+    if (this.#closing || !this.#joined || this.#rejoin || this.#state.phase === "ended") return;
+    if (this.#connection && !this.#connection.closed) this.#send(encodeTimeConfirm());
   }
 
   async #perform(action, prompt) {

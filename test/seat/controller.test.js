@@ -80,7 +80,7 @@ async function setup(t, overrides = {}) {
   const seat = createSeat({
     config, catalog, deck: DECK, record, connect, log,
     replayGraceMs: overrides.replayGraceMs ?? 40, rejoinBaseMs: overrides.rejoinBaseMs ?? 1, random: overrides.random,
-    restoreMs: overrides.restoreMs ?? 15_000, surrenderGraceMs: overrides.surrenderGraceMs,
+    restoreMs: overrides.restoreMs ?? 15_000, surrenderGraceMs: overrides.surrenderGraceMs, keepaliveMs: overrides.keepaliveMs,
   });
   // Closing flushes the run folder's queued writes before it is removed.
   t.after(async () => {
@@ -1105,4 +1105,21 @@ test("a cancelled call frees the seat at once and leaves its events for the next
   const next = await tools.wait({});
   assert.equal(next.isError, undefined);
   assert.match(next.content[0].text, /Rock-paper-scissors: you Rock/);
+});
+
+// srvpro drops a client that has sent nothing for 5 minutes; on 2339 the
+// opponent then wins the match (live in M,TM0,NF#dh7ffdf2a3, 2026-10-21).
+test("a seat that has sent nothing for a while sends a TIME_CONFIRM so srvpro does not drop it", async (t) => {
+  const { seat, link } = await setup(t, { keepaliveMs: 40 });
+  await joinRoom(seat, link);
+  link.take();
+  await delay(130);
+  const sent = link.take();
+  assert.ok(sent.length >= 2, `${sent.length} keepalives in 130 ms`);
+  assert.ok(sent.every((packet) => packet instanceof YGOProCtosTimeConfirm));
+  const answered = seat.answer({ choose: [1] });
+  await tick();
+  assert.ok(link.take().some((packet) => packet instanceof YGOProCtosHandResult), "a real answer still goes out");
+  link.deliver(stocPacket(YGOProStocSelectTp));
+  assert.equal(await answered, "prompt");
 });

@@ -380,6 +380,32 @@ test("lobby prompts resolve to deck, hand and first-player actions", () => {
   assert.deepEqual(resolveAnswer(first, { choose: [2] }), { type: "tp", goFirst: false });
 });
 
+// The stock client shows a Special Summon from the left Pendulum Zone as the
+// Pendulum Summon, and a face-down repositionable monster as a Flip Summon.
+test("main-phase commands name a Pendulum Summon and a Flip Summon", () => {
+  let local = duelBoard();
+  const put = (code, location, sequence, position) => {
+    local = applyBoard(local, gameMessage(YGOProMsgMove, {
+      code, previous: { controller: 0, location: HAND, sequence: 0, position: 0 },
+      current: { controller: 0, location, sequence, position }, reason: 0,
+    }));
+  };
+  put(STRATOS, MZONE, 1, C.POS_FACEDOWN_DEFENSE);
+  put(ODD_EYES, C.LOCATION_SZONE, 0, C.POS_FACEUP_ATTACK);
+  const built = buildPrompt(gameMessage(YGOProMsgSelectIdleCmd, {
+    player: 0, summonableCount: 0, summonableCards: [],
+    spSummonableCount: 1, spSummonableCards: [{ code: ODD_EYES, ...where(0, C.LOCATION_SZONE, 0) }],
+    reposableCount: 2, reposableCards: [{ code: STRATOS, ...where(0, MZONE, 1) }, { code: BLUE_EYES, ...where(0, MZONE, 2) }],
+    msetableCount: 0, msetableCards: [], ssetableCount: 0, ssetableCards: [], activatableCount: 0, activatableCards: [],
+    canBp: 0, canEp: 1, canShuffle: 0,
+  }), { board: local, catalog, hint: null });
+  assert.deepEqual(labels(built).slice(0, 3), [
+    "Pendulum Summon with the scale Odd-Eyes Pendulum Dragon (your S1)",
+    "Flip Summon Elemental HERO Stratos (your M2)",
+    "Change position of Blue-Eyes White Dragon (your M3)",
+  ]);
+});
+
 test("answers must fit the prompt: right field, option numbers in range, no repeats", () => {
   const built = prompt(YGOProMsgSelectCard, {
     player: 0, cancelable: 0, min: 1, max: 2, count: 2,

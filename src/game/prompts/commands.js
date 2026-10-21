@@ -2,10 +2,12 @@ import {
   BattleCmdType,
   IdleCmdType,
   IndexResponse,
+  OcgcoreCommonConstants as C,
   YGOProMsgSelectBattleCmd,
   YGOProMsgSelectIdleCmd,
 } from "ygopro-msg-encode";
 
+import { cardAt } from "../board.js";
 import { effectText } from "../events.js";
 import { phaseLabel } from "../labels.js";
 import { answerField, cardOption, chooseOne, response } from "./options.js";
@@ -23,8 +25,11 @@ function idle(message, context) {
     refs.push({ type, index });
   });
   add(IdleCmdType.SUMMON, message.summonableCards, () => ({ prefix: "Normal Summon " }));
-  add(IdleCmdType.SPSUMMON, message.spSummonableCards, () => ({ prefix: "Special Summon " }));
-  add(IdleCmdType.REPOS, message.reposableCards, () => ({ prefix: "Change position of " }));
+  // As the stock client reads them: a Special Summon from a Pendulum Zone is
+  // the Pendulum Summon, and a face-down monster's position change a Flip Summon.
+  const faceDown = (card) => Boolean(context.board && (cardAt(context.board, card.controller, card.location, card.sequence)?.position & C.POS_FACEDOWN));
+  add(IdleCmdType.SPSUMMON, message.spSummonableCards, (card) => ({ prefix: card.location === C.LOCATION_SZONE ? "Pendulum Summon with the scale " : "Special Summon " }));
+  add(IdleCmdType.REPOS, message.reposableCards, (card) => ({ prefix: faceDown(card) ? "Flip Summon " : "Change position of " }));
   add(IdleCmdType.MSET, message.msetableCards, () => ({ prefix: "Set " }));
   add(IdleCmdType.SSET, message.ssetableCards, () => ({ prefix: "Set " }));
   add(IdleCmdType.ACTIVATE, message.activatableCards, (card) => activation(context, card));

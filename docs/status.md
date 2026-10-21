@@ -1,12 +1,12 @@
 # Status
 
-Last checked: 2026-10-12. The accepted [concept](context/concept-zero.md), [architecture](architecture.md), [contracts](contracts.md) and [roadmap](roadmap.md) govern development. [alignment.md](alignment.md) is historical.
+Last checked: 2026-10-21. The accepted [concept](context/concept-zero.md), [architecture](architecture.md), [contracts](contracts.md) and [roadmap](roadmap.md) govern development. [alignment.md](alignment.md) is historical.
 
 ## Implemented
 
 The MCP seat is implemented: `src/bin/seat.js` serves eight tools over stdio (`wait`, `answer`, `deck_show`, `deck_edit`, `card`, `card_search`, `chat`, `surrender`) and plays as a normal YGOPro client. It covers card data, the deck model, the board mirror, readable events, prompt builders for all 20 response-bearing messages, the seat state machine, the run folder, and the text and JSON views. `npm run cards`, `npm run smoke` and `npm run probe` are the operator commands.
 
-`npm test` passes 157 offline tests on Node 22.23.2, 24.15.0 and 26.10.0, and `npm run spec` 10 more against the real seat and the downloaded card data. These include authored card fixtures, constructed codec messages, a connection double and captured sessions; their results are diagnostic, not live-duel proof. Separately, `spec/seat-entry.test.js` passes against the real seat. `spec/upstream-msg-encode.test.js` fails on purpose: it holds the four codec defects the seat works around ([report](upstream/ygopro-msg-encode.md), not filed).
+`npm test` passes 166 offline tests on Node 22.23.2, 24.15.0 and 26.10.0, and `npm run spec` 11 more against the real seat and the downloaded card data. These include authored card fixtures, constructed codec messages, a connection double and captured sessions; their results are diagnostic, not live-duel proof. Separately, `spec/seat-entry.test.js` passes against the real seat. `spec/upstream-msg-encode.test.js` fails on purpose: it holds the five codec defects the seat works around ([report](upstream/ygopro-msg-encode.md), not filed).
 
 The code review added eight regressions, first observed failing and then passing: empty card/sum selections, the shuffle wire layout and occupied slots, Extra Deck returns on a Deck/GY swap, the chat/match-end write race, model-visible scales/positions/targets, and the required English strings file. A ninth test checks that a sum prompt tells the model an empty choice is allowed. These fixes still need normal-duel coverage in P1.11–P1.12.
 
@@ -37,7 +37,21 @@ A peer review of `a48855a` found two more defects, each fixed with a test that f
 
 A PR review of `74bed1b` found that a seat that lost its connection within a surrender's 10 s grace kept the held prompt. It could come back while the seat was still rejoining, with a refusal event the server never gave, or after the restore had resent it. A rejoin now drops it, test first.
 
-## Live evidence on 2339 (2026-10-07 to 2026-10-12)
+The 2026-10-21 readiness review ran three hostile reviewers over the whole first-party code, checked their findings live on 2339, and ran the Droid agent match below. Nine fixes followed, each with a test that fails on the old code:
+
+- srvpro drops a client that has sent nothing for 5 minutes, and 2339 then gives its opponent the match. A seat sends nothing while either model thinks, and that ended the Droid match. After a minute of silence the seat now sends a `CTOS_TIME_CONFIRM`, which a room with no clock ignores. Two seats that held a prompt for 330 s were dropped at 300 s before the fix (`id7d0b9ba3`) and kept after it (`id47b866e0`).
+- Rock-paper-scissors: the codec names 1 Rock and 2 Scissors, but the server scores 1 as Scissors and 2 as Rock (the stock client's hand textures agree). "Rock" sent Scissors, and the result line named the loser as the winner, as both agents saw in the Droid match below. The seat now sends the server's values; the upstream report gains this as a fifth case.
+- A runtime that cancels a blocking call (a user interrupt, or a per-call timeout below `YGO_WAIT_MS`) left the seat refusing every call until the wait budget ran out, and the view the cancelled call built counted as delivered although the SDK drops it. A real MCP client reproduced this on 2339 against `master`; the seat now frees the call at once and delivers nothing.
+- A failed first connect wrote `aborted` and ended the match before srvpro held any seat; the deck prompt now comes back with the reason.
+- Every entry point (`seat`, `cards`, `probe`, `smoke`) exited 0 without a word when launched through a symlinked path, such as macOS `/tmp`; they now compare real paths.
+- A deck code that was a word, or cut short, imported as a different deck without an error.
+- A place answer that named more zones than asked was cut to the first ones without an error.
+- The sort prompt did not say that option 1 is the current top card and that the first card listed goes on top.
+- A Pendulum Summon read as summoning the scale itself, and a Flip Summon as a plain position change.
+
+Two findings did not hold on 2339: a 16-card Extra Deck and a 61-card Main Deck are refused with their counts rather than cut down (`exeb47aa4c`, `mnf7540fe8`), and srvpro passes `MSG_RETRY` on to the client, so a refused answer comes back as a rejected prompt (`rt539331fe`, the first live proof of that path). Deferred: en-US lags MyCard's `test-update.cdb` on the archetype codes of 20 cards; card text is downloaded unpinned, as daily pre-release data requires; agents are kept apart only by separate folders, which neither agent left in the Droid match; a seat srvpro kicks for running out of side time records `aborted` rather than a loss; and seven Low items.
+
+## Live evidence on 2339 (2026-10-07 to 2026-10-21)
 
 - **Smoke runs.** Two model-free seats passed `npm run smoke` in rooms `M,TM0,NF#smc1c37f09` and `M,TM0,NF#smedf73be1`. Each run covered the join, rock-paper-scissors, the first-player choice, two duels ended by surrender, siding, `DUEL_END` and both replays in each run folder, with chat delivered both ways. The captured packets are now test fixtures.
 - **Post-review smoke.** `YGO_CAPTURE=1 npm run smoke` passed in `M,TM0,NF#smea60dcf7`. Both seats heard chat and completed two surrendered duels. Each folder under `runs/smea60dcf7/` holds two decks, two replays, results and a capture. Independent readback parsed all 108 packets from the first seat and all 112 from the second, and confirmed that every saved replay exactly equals its captured server payload.
@@ -63,12 +77,23 @@ A PR review of `74bed1b` found that a seat that lost its connection within a sur
 
 - **Card sources (2026-10-12).** The English pre-release source moved: its maintainer retired `ElderLich/TransSuperpre` on 2026-10-11 and publishes the same two files in `ElderLich/Pre-Release-Translations`. Before the switch, the new files were checked against MyCard's super-pre data: every card they share has the same ID and the same stats. `npm run cards` then succeeded again, with 105 English pre-release cards, all of them in MyCard's set.
 
+- **Second agent match (2026-10-21, Droid).** Droid 0.245.0 ran Claude Haiku 5.5 (`claude-haiku-5-5`) against GPT-6 Luna (`gpt-6-luna`), both at reasoning effort `max` from the Droid settings and `--auto high`, in `M,TM0,NF#dh7ffdf2a3` on `1d2bd87`, with no deck loaded. Haiku built Elemental HERO (40 cards, 14 Extra) and Luna Royal Magical Library Exodia (40); neither built a Side Deck. Haiku won duel 1 on turn 7 by LP. At side, Luna swapped in three Monster Reincarnation it did not own; 2339 refused the Side Deck, the seat gave the reason, and Luna resubmitted its deck unchanged. In duel 2 Luna stalled on its turn-5 prompt; after 5 minutes 2339 dropped Haiku's silent seat and gave Luna the duel by "Lost connection", and with it the match 1-1 by forfeit. Haiku's rejoin found no match and recorded `aborted`. That drop is fixed above; the match did not end by play.
+  - GPT-6 Luna repeatedly stopped calling the seat and ran no-op shell commands instead until it gave up. Its session ended four times mid-duel and was relaunched with the same command; each new seat resumed from the run folder and rejoined within 1.7 s. Haiku played the whole match in one session (75 minutes).
+  - No answer was rejected, and no seat logged a warning before the drop. All 337 successful tool results reached the models whole; Droid's log shows the text of the other 12, failed card lookups by partial names, as empty. Haiku's views carry events #1–#735 without a gap; each of Luna's five seat processes numbers its events from #1 without a gap.
+  - Every duel deck file equals that player's deck in the server's replays. Only Luna's folder holds them: Haiku's seat was gone when the server sent them. Through ocgcore (koishipro-core.js 1.5.5 with the stock and first-edition scripts), replay 1 plays all 400 answers to Haiku's LP win on turn 7, and replay 2 all 154 answers to turn 5, where the drop ended it. The board matches all 1,828 zone and card reports in each capture, Luna's four reloads included; Deck cards are counted, not identified (the TODO above).
+  - Neither agent read outside its own folder; Luna's only real shell commands were `pwd`, `date` and `exit 0`.
+- **Readiness probes (2026-10-21).** The plain smoke passed on `1d2bd87` in `sm6b8576ad`, and on the fixes in `sme6698ad3` (plain) and `smb74b89a7` (restart). Model-free seats checked the side rule: a Side Deck with a card the deck never held was refused with the reason, and a Kuriboh/Giant Rat swap was accepted, recorded in `duel-2.ydk` and dealt as recorded (`sd1d3f5040` on `1d2bd87`, `sd38a833ef` on the fixes). A 16-card Extra Deck and a 61-card Main Deck were refused with their counts (`exeb47aa4c`, `mnf7540fe8`). An answer ocgcore refuses came back as `MSG_RETRY`, which the seat showed as a rejected prompt (`rt539331fe`). A real MCP client that gave up on a call got "a call is already waiting" from the next one on `1d2bd87`, and the next view with the undelivered events on the fixes.
+- **Card data (2026-10-21).** The pre-release sets grew: the English set holds 138 cards (105 before), and all of them have MyCard's IDs and stats. The catalog holds 15,209 cards.
+- **Replays through ocgcore (2026-10-21).** The first agent match's replays play through ocgcore to the recorded results: replay 1 plays all 198 answers to Codex's Exodia win, and replays 2 and 3 play all their answers to turn 2, where the surrenders ended them. This shows the saved replays are complete; it is not KoishiPro's viewer.
+
 ## Not yet proven
 
-- That the agent match's replays open in KoishiPro: the last check of P1.11 and P2.2.
+- That the agent matches' replays open in KoishiPro: the last check of P1.11 and P2.2. They do play through ocgcore to the recorded results.
+- An agent Bo3 decided by play on the fixed code: the Droid match ended by the idle drop, and no agent match has run with the keepalive.
+- A side change made by an agent and accepted on the current code: in the Droid match neither agent built a Side Deck. The side path itself is proven with model-free seats.
 - The rest of P1.12: replaying the agent match's captures through the controller to its live phases, keepalives and auto-passes.
 - A surrender refused live: no room on 2339 has refused one yet, so the fix is proven only offline.
-- Cost per match (P2.3), Gemini CLI, and a 15-minute think (Q-02).
+- Cost per match (P2.3), Gemini CLI, and a 15-minute think (Q-02; a 330 s hold passed with the keepalive).
 - A rejoin caused by a live packet fault: only reproduced locally (a malformed `MSG_START` now leaves the seat running) and replayed from captured bytes.
 
 Downloaded card data stays local and out of Git.

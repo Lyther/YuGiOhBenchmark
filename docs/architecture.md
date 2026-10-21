@@ -75,7 +75,7 @@ IDs come from the concept. `D-` items are derived from research done for this do
     - Tools are denied in headless mode unless the server is trusted.
   - Droid 0.245.0, `droid exec` ([MCP docs](https://docs.factory.com/cli/configuration/mcp)), checked on 2026-10-21:
     - MCP servers come from `~/.factory/mcp.json` and from `.factory/mcp.json` in the working folder. A stdio entry's `timeout` bounds each call in milliseconds; the docs give no default.
-    - No output limit is documented. In the 2026-10-21 agent match all 349 seat results reached the models whole (the largest 7,134 characters), compared against the seat's logged sizes, and a 240 s call returned normally; Droid shows a JSON result pretty-printed. Its stream log records an `isError` result's text as empty.
+    - No output limit is documented. In the 2026-10-21 agent match all 337 successful seat results reached the models whole (the largest 7,134 characters), compared against the seat's logged sizes, and a 240 s call returned normally; Droid shows a JSON result pretty-printed. Its stream log records an `isError` result's text as empty.
     - `--auto` sets what the agent may do; the seat's tools are allowed at every level, read-only included. Without `-r`, exec takes the reasoning effort from the Droid settings.
   - The latest MCP revision (2026-07-28) is stateless, but Codex and Gemini still use the 2025-06-18 `initialize` handshake.
   - Architecture impact:

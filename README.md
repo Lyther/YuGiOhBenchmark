@@ -2,7 +2,7 @@
 
 LLM-versus-LLM Yu-Gi-Oh! on the existing server at `koishi.momobako.com:2339`: server ↔ MCP ↔ model.
 
-Each model runs in its own agent runtime (Claude Code, Codex CLI, …) with one **seat**. The seat is a stdio MCP server and a normal YGOPro client. Both seats join one room, `M,TM0,NF#<id>`: Bo3, no clock, no banlist. The server runs the game: rules, deck and side checks, the match result, and replays. The accepted [concept](docs/context/concept-zero.md), [architecture](docs/architecture.md), [contracts](docs/contracts.md) and [roadmap](docs/roadmap.md) are the source of truth; [status](docs/status.md) says what has been proven.
+Each model runs in its own agent runtime (Claude Code, Codex CLI, Droid, …) with one **seat**. The seat is a stdio MCP server and a normal YGOPro client. Both seats join one room, `M,TM0,NF#<id>`: Bo3, no clock, no banlist. The server runs the game: rules, deck and side checks, the match result, and replays. The accepted [concept](docs/context/concept-zero.md), [architecture](docs/architecture.md), [contracts](docs/contracts.md) and [roadmap](docs/roadmap.md) are the source of truth; [status](docs/status.md) says what has been proven.
 
 ## Install
 
@@ -64,6 +64,22 @@ codex exec --skip-git-repo-check \
 ```
 
 `codex exec` refuses to start outside a Git repository unless `--skip-git-repo-check` is given, and it cannot ask for approval, so the seat's tools are pre-approved. The timeout is set explicitly above the seat's 240 s wait budget (`YGO_WAIT_MS`), and the output limit is raised so seat results are not truncated. Set `YGO_DECK` to a `.ydk` path to start an agent with a given deck; otherwise it builds one with the deck tools.
+
+Droid reads MCP servers from `.factory/mcp.json` in its working folder as well as from `~/.factory/mcp.json`, so each seat's entry goes in its agent's own folder. Write `/path/to/match01/droid/.factory/mcp.json`:
+
+```json
+{ "mcpServers": { "ygo": { "type": "stdio", "command": "node", "args": ["/path/to/repo/src/bin/seat.js"],
+  "env": { "YGO_ROOM": "M,TM0,NF#match01", "YGO_NAME": "droid-seat", "YGO_CARDS_DIR": "/path/to/repo/data/cards",
+           "YGO_RUN_DIR": "/path/to/match01/droid", "YGO_CAPTURE": "1" },
+  "timeout": 300000 } } }
+```
+
+```bash
+cd /path/to/match01/droid
+droid exec -m <model> --auto high "$(cat /path/to/repo/prompts/play-match.md)"
+```
+
+`timeout` is Droid's per-call limit in milliseconds; it is set above the wait budget because Droid documents no default. The seat's tools run at every `--auto` level (`droid exec --list-tools` lists them); `--auto high` only decides what else the agent may do. Without `-r`, `droid exec` uses the reasoning effort of your Droid settings. If another Node.js comes first on Droid's `PATH`, give `command` the absolute path of Node 22 or newer.
 
 If a connection drops, the seat rejoins the match by itself. If an agent or its seat stops mid-match, run the same command again in the same folder within about 5 minutes (how long 2339 holds a dropped seat): the new seat resumes the match from its run folder, with the deck the match started with.
 

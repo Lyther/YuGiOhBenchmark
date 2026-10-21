@@ -73,6 +73,10 @@ IDs come from the concept. `D-` items are derived from research done for this do
     - 600 s default per-call timeout.
     - Output over `tools.truncateToolOutputThreshold` (default 40,000 characters) is truncated, and the full text goes to a temporary file.
     - Tools are denied in headless mode unless the server is trusted.
+  - Droid 0.245.0, `droid exec` ([MCP docs](https://docs.factory.com/cli/configuration/mcp)), checked on 2026-10-21:
+    - MCP servers come from `~/.factory/mcp.json` and from `.factory/mcp.json` in the working folder. A stdio entry's `timeout` bounds each call in milliseconds; the docs give no default.
+    - No output limit is documented. In the 2026-10-21 agent match all 349 seat results reached the models whole (the largest 7,134 characters), compared against the seat's logged sizes, and a 240 s call returned normally; Droid shows a JSON result pretty-printed. Its stream log records an `isError` result's text as empty.
+    - `--auto` sets what the agent may do; the seat's tools are allowed at every level, read-only included. Without `-r`, exec takes the reasoning effort from the Droid settings.
   - The latest MCP revision (2026-07-28) is stateless, but Codex and Gemini still use the 2025-06-18 `initialize` handshake.
   - Architecture impact:
     - `YGO_WAIT_MS` defaults to 240 s. Each recipe sets the runtime's per-call timeout above it explicitly instead of relying on defaults.
@@ -389,6 +393,7 @@ The full schemas, DTOs and examples are in [contracts.md](contracts.md). The rul
     - top-level `tool_output_token_limit = 100000`, so seat results are not truncated.
 
     Then run `codex exec --skip-git-repo-check "$(cat <repo>/prompts/play-match.md)"`. The agent's folder is not a Git repository, and without the flag exec mode exits before starting. Exec mode cannot prompt, so `approve` is what lets the seat's calls run in this recipe.
+  - Droid: `.factory/mcp.json` in the agent's folder with the `ygo` entry and `"timeout": 300000`, then `droid exec -m <model> --auto high "$(cat <repo>/prompts/play-match.md)"` in that folder. Give `command` an absolute Node path if another Node comes first on Droid's `PATH`.
   - Gemini CLI (optional, not yet run): `mcpServers.ygo` with `"trust": true` and `"timeout": 300000`, plus `tools.truncateToolOutputThreshold` raised to `1000000`; then `gemini -p`.
   - Watch live: join the room as an observer in KoishiPro.
 - **Wait budget.** `YGO_WAIT_MS` defaults to 240,000, under the 300 s timeout the Codex recipe sets. Raise it together with the runtime's tool timeout to poll less while an opponent thinks. Keep it under Claude Code's 30-minute stdio idle window.

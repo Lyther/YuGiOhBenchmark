@@ -154,7 +154,8 @@ Rules shared by all tools:
   - Seat-state errors return `isError: true` with one sentence and a `next` hint. The cases are: no pending prompt, an answer field that does not fit the prompt kind, an option number out of range, an unknown card name in a deck edit, chat while not connected, an answer, chat or surrender while the seat is rejoining, or a tool called after `disconnected`.
   - Server rejections are never tool errors. They come back as the next prompt with `rejected`.
 - **Annotations.** `deck_show`, `card` and `card_search` declare `readOnlyHint: true`; the other tools declare none. Approval is configured in the runtime (architecture Operations), not inferred from hints.
-- **Concurrency.** At most one blocking call (`wait`, `answer`, `surrender`) runs at a time per seat. A second one returns an `isError` that says a call is already waiting. A blocking call the runtime cancels frees the seat at once and marks nothing delivered, so the next call shows what it would have shown. `deck_show`, `deck_edit`, `card`, `card_search` and `chat` can run at any time, including while a `wait` is blocked.
+- **Concurrency.** At most one blocking call (`wait`, `answer`, `surrender`) runs at a time per seat. A second one returns an `isError` that says a call is already waiting; so does any `wait`, `answer` or `surrender` that arrives while an answer is still being sent (the first submit connects first, so that window is about one round trip). A blocking call the runtime cancels frees the seat at once and marks nothing delivered, so the next call shows what it would have shown. `deck_show`, `deck_edit`, `card`, `card_search` and `chat` can run at any time, including while a `wait` is blocked.
+- **Side time.** srvpro gives a seat 3 minutes from `CHANGE_SIDE` to send its side deck (2339 announces it, then 2 and 1 minutes), and then removes it: the opponent wins the match and the seat cannot rejoin (`system_kicked` blocks the reconnect hold). The seat can only tell the model, and only in a result it returns. The side prompt states the limit. While a side deck is due, `next` of every SeatView and the text result of every other tool (`deck_show`, `deck_edit`, `card`, `card_search`, `chat`) end with the time left, turning into a plain "submit now" in the last 60 s. The JSON results of the other tools and the `ydk`/`ydke`/`code` exports are not changed, and nothing is sent to a model that is not calling a tool. A refused side deck keeps the original deadline; a rejoin during siding gets a new `CHANGE_SIDE` and a new 3 minutes (verified on 2339). The seat that was removed records `aborted` (it sees a closed socket); the server's own score is a loss.
 
 ### `wait`
 
@@ -186,7 +187,7 @@ Rules shared by all tools:
 - **Input:** `{format?: "text" | "json" | "ydk" | "ydke" | "code"}`.
 - **Result:**
   - `text`/`json`: a DeckView of the working deck.
-  - `ydk`/`ydke`/`code`: the export string, via `ygopro-deck-encode`.
+  - `ydk`/`ydke`/`code`: the export string, via `ygopro-deck-encode`. A deck code holds at most 4 copies of a card, and the room has no banlist, so a deck with more is refused with that reason (`isError`); `ydk` and `ydke` carry any count.
 
 ### `deck_edit`
 
@@ -194,7 +195,7 @@ Rules shared by all tools:
   - `Edit` is `{card: int | string, count?: 1..60, section?: "main" | "extra" | "side"}`.
   - `Move` is `{card: int | string, count?: int, from: section, to: section}`.
 - **Behavior:**
-  - `import` replaces the deck and accepts YDK text, a `ydke://` URL or a KoishiPro deck code. A deck code must decode to whole 4-byte card entries; a word or a cut-off code is refused.
+  - `import` replaces the deck and accepts YDK text, a `ydke://` URL or a KoishiPro deck code. A deck code must decode to whole 4-byte card entries; a word or a cut-off code is refused. A YDK card line may carry text after the code (`14558127 # Ash Blossom`), as in ygopro.
   - A name must resolve to exactly one catalog card (case-insensitive exact name, then a unique prefix). Otherwise the call is an error that lists up to 5 suggestions.
   - `add` without a section puts Fusion/Synchro/Xyz/Link cards in extra and everything else in main.
   - Edits are allowed in any phase; only the submitted deck matters. A join, including a rejoin before the first duel, sends the deck last submitted, never later edits.
@@ -235,7 +236,7 @@ Rules shared by all tools:
   - `prompt: PromptView | null`.
   - `waiting`: `opponent | server | rejoin | null`.
   - `disconnected`: a reason or null.
-  - `next`: one imperative sentence telling the model what to call.
+  - `next`: one imperative sentence telling the model what to call. While a side deck is due it also says how long the server still waits (see Side time).
 - **BoardView.**
   - `duel`, `turn`, `phase`, `turnPlayer`, `lp: {you, opponent}`.
   - `you: SideView` and `opponent: SideView`.
@@ -297,7 +298,7 @@ Every automatic answer appends an `auto` event naming what was chosen. The seat 
 - **SeatView** is built by `seat/view.js` from Seat, Board and Prompt.
   - `board` comes from `board.js` state, with absolute player ids converted to `you` / `opponent`.
   - `events` are all Events with `seq` greater than `delivered.event`.
-  - `next` is derived from phase and prompt.
+  - `next` is derived from phase and prompt, and from the side time left.
 - **PromptView** omits `source` and every Option's `ref`.
   - Labels come from `labels.js` and the catalog. A zeroed code is resolved through the board; if that fails, the label is `face-down card` plus the zone.
   - `tributes`, `values` and `counters` are copied from the message, with `values` split as ocgcore's `get_sum_params` does.

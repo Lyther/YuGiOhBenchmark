@@ -63,3 +63,8 @@ test("a deck code that cannot hold the deck says so, and ydk and ydke still can"
   assert.throws(() => exportDeck(heavy, "code"), (error) => error instanceof DeckEditError && /deck code cannot hold this deck.*ydk or ydke/.test(error.message));
   for (const format of ["ydk", "ydke"]) assert.equal(parseDeck(exportDeck(heavy, format)).main.length, 5, format);
 });
+
+test("a YDK card line with text after the code is still that card, as in ygopro", () => {
+  const deck = parseDeck("#main\n14558127 # Ash Blossom\n89631139\t// Blue-Eyes\r\n#extra\n44508094 Stardust Dragon\n!side\n23434538 # Maxx C\r\n");
+  assert.deepEqual(deck, { main: [14558127, 89631139], extra: [44508094], side: [23434538] });
+});

@@ -5,6 +5,9 @@ const FORMATS = "YDK text, a ydke:// URL or a KoishiPro deck code";
 // A KoishiPro deck code is unpadded or padded base64url.
 const DECK_CODE = /^[A-Za-z0-9_-]+={0,2}$/;
 const YDK_MARKER = /^\s*(?:#main|#extra|!side)\s*$/m;
+// ygopro reads the leading digits of a YDK card line, so "14558127 # Ash
+// Blossom" is a card there; the decoder would skip the whole line.
+const CARD_LINE_TEXT = /^(\d+)[ \t]+\S.*$/gm;
 
 export function emptyDeck() {
   return { main: [], extra: [], side: [] };
@@ -29,7 +32,7 @@ export function parseDeck(text) {
       throw new Error(`invalid ydke:// URL: ${error.message}`);
     }
   }
-  if (YDK_MARKER.test(source)) return plain(YGOProDeck.fromYdkString(source));
+  if (YDK_MARKER.test(source)) return plain(YGOProDeck.fromYdkString(source.replace(CARD_LINE_TEXT, "$1")));
   if (!DECK_CODE.test(source)) throw new Error(`deck import expects ${FORMATS}`);
   // Every card entry is 4 bytes; the decoder skips a partial one, so a word or
   // a cut-off code would otherwise import as a different deck.

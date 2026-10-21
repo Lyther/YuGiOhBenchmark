@@ -31,6 +31,10 @@ export function parseDeck(text) {
   }
   if (YDK_MARKER.test(source)) return plain(YGOProDeck.fromYdkString(source));
   if (!DECK_CODE.test(source)) throw new Error(`deck import expects ${FORMATS}`);
+  // Every card entry is 4 bytes; the decoder skips a partial one, so a word or
+  // a cut-off code would otherwise import as a different deck.
+  const bytes = Buffer.from(source.replace(/=+$/, ""), "base64url").length;
+  if (bytes === 0 || bytes % 4 !== 0) throw new Error(`invalid deck code: ${bytes} bytes is not a whole number of 4-byte card entries`);
   let decoded;
   try {
     decoded = YGOProDeck.fromEncodedString(source);

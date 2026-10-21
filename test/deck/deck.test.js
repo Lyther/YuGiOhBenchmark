@@ -42,6 +42,12 @@ test("unrecognized or malformed imports are refused with the accepted formats", 
   assert.throws(() => parseDeck("#main\n268435456\n"), /code 268435456/);
 });
 
+test("a deck code must decode to whole card entries: a word or a cut-off code is refused", () => {
+  assert.throws(() => parseDeck("HERO"), /deck code/);
+  assert.throws(() => parseDeck("AshBlossom"), /deck code/);
+  assert.throws(() => parseDeck(exportDeck(DECK, "code").slice(0, -2)), /deck code/);
+});
+
 test("an edit that cannot apply rejects the whole call with the reason", async () => {
   const { applyEdits, DeckEditError } = await import("../../src/deck/deck.js");
   const start = { main: [89631139], extra: [], side: [] };

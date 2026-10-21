@@ -415,6 +415,12 @@ test("a sort says which end of the Deck is the top", () => {
   assert.match(sort.prompt.text, /option 1 is the current top card.*the first you list goes on top/i);
 });
 
+test("a place answer names exactly the zones asked for", () => {
+  const open = (sequences) => (~sequences.reduce((mask, sequence) => mask | (1 << sequence), 0)) >>> 0;
+  const place = prompt(YGOProMsgSelectPlace, { player: 0, count: 1, flag: open([0, 2]) });
+  assert.throws(() => resolveAnswer(place.prompt, { choose: [1, 2] }), /exactly 1/);
+});
+
 test("answers must fit the prompt: right field, option numbers in range, no repeats", () => {
   const built = prompt(YGOProMsgSelectCard, {
     player: 0, cancelable: 0, min: 1, max: 2, count: 2,
